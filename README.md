@@ -114,6 +114,21 @@ genders (GPU-accelerated):
 VA_SPEAKER_ID=p230 ./venv/bin/python assistant.py   # any of VCTK's 109 speakers
 ```
 
+## Lectures, YouTube & phone
+
+- **📝 Lecture note-taker** — press `[n]` in the voice menu before a class,
+  lecture video or meeting. It records as long as you like; on stop it
+  transcribes everything, writes structured markdown notes (summary, topics,
+  definitions, action items) to `~/Documents/lecture-notes/`, and auto-creates
+  5 flashcards from the content.
+- **▶️ YouTube summarizer** — paste a YouTube link in chat: "summarize this
+  video <url>" → transcript with timestamps → key points; you can ask follow-up
+  questions or say "quiz me on it".
+- **📱 Telegram bridge** — `./venv/bin/python telegram_bot.py` after a one-time
+  setup (see the file's docstring): your assistant on your phone with the same
+  memory, lists, reminders and web search. Locked to your Telegram account;
+  shell commands are always refused remotely.
+
 ## More tools & modes
 
 - **🗣️ Live translator** — practice section `Translator`: speak Nepali, it speaks

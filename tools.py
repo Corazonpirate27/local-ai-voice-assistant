@@ -758,6 +758,53 @@ def ask_document(path, question, top_k=4):
             + "\n\nAnswer the user's question using these passages.")
 
 
+# --- YouTube transcript / summarizer ----------------------------------------------
+def youtube_transcript(url, max_chars=9000):
+    """Fetch a YouTube video's transcript with [mm:ss] timestamps so the model
+    can summarize it, extract key points, or quiz the user on it."""
+    import re as _re
+    m = _re.search(r"(?:v=|youtu\.be/|shorts/|embed/)([\w-]{11})", url or "")
+    if not m:
+        return "That doesn't look like a YouTube link."
+    vid = m.group(1)
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+        api = YouTubeTranscriptApi()
+        try:
+            fetched = api.fetch(vid, languages=["en", "en-US", "hi", "ne"])
+        except Exception:
+            listing = api.list(vid)
+            fetched = listing.find_transcript(
+                [t.language_code for t in listing]).fetch()
+        entries = [(s.start, s.text) for s in fetched]
+    except Exception as exc:
+        return (f"Couldn't get a transcript for that video ({exc}). It may have "
+                "captions disabled.")
+    # Group into ~20s blocks with timestamps.
+    lines, block, block_start = [], [], 0
+    for start, text in entries:
+        if not block:
+            block_start = start
+        block.append(text.replace("\n", " ").strip())
+        if start - block_start >= 20:
+            lines.append(f"[{int(block_start // 60):02d}:{int(block_start % 60):02d}] "
+                         + " ".join(block))
+            block = []
+    if block:
+        lines.append(f"[{int(block_start // 60):02d}:{int(block_start % 60):02d}] "
+                     + " ".join(block))
+    out = "\n".join(lines)
+    if len(out) > max_chars:
+        # keep the beginning and evenly sample the rest
+        keep = [lines[0]]
+        step = max(1, len(lines) // 60)
+        keep += lines[1::step]
+        out = "\n".join(keep)[:max_chars] + "\n…(transcript sampled to fit)"
+    dur = entries[-1][0] if entries else 0
+    return (f"Transcript of youtube video {vid} "
+            f"(~{int(dur // 60)} min, timestamps in [mm:ss]):\n{out}")
+
+
 # --- study projects (Claude-Code-style: scaffold, review, run) --------------------
 PROJECTS_ROOT = os.path.realpath(os.path.expanduser(
     os.environ.get("VA_PROJECTS_ROOT", "~/StudyProjects")))
@@ -1561,6 +1608,14 @@ TOOLS = [
             "variable": {"type": "string", "description": "Variable name, default x"}},
             "required": ["expression"]}}},
     {"type": "function", "function": {
+        "name": "youtube_transcript",
+        "description": ("Get a YouTube video's transcript with timestamps. Use when "
+                        "the user shares a YouTube link to summarize, extract key "
+                        "points from, or be quizzed on."),
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string", "description": "The YouTube URL"}},
+            "required": ["url"]}}},
+    {"type": "function", "function": {
         "name": "create_project_file",
         "description": ("Create or overwrite a file inside the student's study "
                         "projects folder (~/StudyProjects). Use to scaffold starter "
@@ -1708,6 +1763,8 @@ def dispatch(name, args, confirm=None):
     if name == "save_progress":
         return save_progress(args.get("subject", ""), args.get("covered", ""),
                              args.get("weak_spots", ""), args.get("next_topic", ""))
+    if name == "youtube_transcript":
+        return youtube_transcript(args.get("url", ""))
     if name == "create_project_file":
         return create_project_file(args.get("path", ""), args.get("content", ""))
     if name == "review_project":

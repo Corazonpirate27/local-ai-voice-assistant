@@ -697,13 +697,15 @@ def push_prompt(current_model, practice=None):
                 print(f"  [{i + 1}] {model_label(m)}{mark}")
         try:
             choice = input(f"▶ [Enter] talk   [1-{len(models)}] model   [p] practice   "
-                           f"[d] dictate   [q] quit: ").strip().lower()
+                           f"[d] dictate   [n] lecture notes   [q] quit: ").strip().lower()
         except EOFError:
             return "quit"
     if choice == "":
         return "talk"
     if choice == "d":
         return "dictate"
+    if choice == "n":
+        return "notes"
     if choice in ("q", "quit", "exit"):
         return "quit"
     if choice == "p":
@@ -763,6 +765,45 @@ def load_whisper(name):
     if dev == "cpu":
         print("ℹ️  Whisper is on CPU (slower STT, but coexists with the LLM on GPU).")
     return model
+
+
+HELP_ROWS = [
+    ("STUDY", ""),
+    ("/course",              "structured courses — continue where you left off"),
+    ("/course list",         "the 8 courses (python, cs, math, physics, ai, cybersec, software-eng, webdev)"),
+    ("/course start <name>", "enroll and begin module 1"),
+    ("/course syllabus",     "your position in each course"),
+    ("/course done",         "finish the current module → unlock the next"),
+    ("/learn <subject>",     "free-form tutor (no fixed syllabus)"),
+    ("/quiz <subject>",      "8 graded questions with a score"),
+    ("/review",              "flashcards due today (spaced repetition)"),
+    ("PRACTICE", ""),
+    ("/practice embassy <country>", "visa interview role-play, any country"),
+    ("/practice interview", "job interview (also: exam, work)"),
+    ("/practice translator", "live English ↔ नेपाली interpreter"),
+    ("/practice off",        "leave practice"),
+    ("CHAT", ""),
+    ("/models",              "installed models with what each is best for"),
+    ("/model <n|name>",      "switch model (or just say 'switch to qwen')"),
+    ("/resume",              "continue your last saved conversation"),
+    ("```",                  "start a multi-line code paste (end with ``` alone)"),
+    ("/help",                "this list"),
+    ("/quit",                "save the chat and exit"),
+]
+
+
+def text_banner(model, agent):
+    """Startup screen for text mode: identity + the full command reference."""
+    lines = ["", f"{CYAN}╭─ 🎙  Voice Assistant — text chat ─────────────────────────────╮{RESET}",
+             f"  Model: {GREEN}{model_label(model)}{RESET}"
+             + (f"   Tools: {GREEN}on{RESET}" if agent else "   Tools: off (start with --agent)")]
+    for cmd, desc in HELP_ROWS:
+        if not desc:
+            lines.append(f"{CYAN}├─ {cmd} ─{RESET}")
+        else:
+            lines.append(f"  {GREEN}{cmd:<29}{RESET}{DIM}{desc}{RESET}")
+    lines.append(f"{CYAN}╰─ just type to chat — e.g. \"search the news\", \"open spotify\" ─╯{RESET}")
+    return "\n".join(lines) + "\n"
 
 
 # --- conversation persistence ---------------------------------------------------
@@ -869,9 +910,7 @@ def text_main(agent):
         except EOFError:
             return False
 
-    print(f"💬 Text chat — LLM: '{current_model}'{', agent tools ON' if agent else ''}.")
-    print("Commands: /models, /model <name|number>, /help, /quit. "
-          "Or just type your message.\n")
+    print(text_banner(current_model, agent))
 
     history = [{"role": "system", "content": sys_prompt}]
     tools_mode = False        # /learn and /review need tools even without --agent
@@ -921,11 +960,7 @@ def text_main(agent):
             print("Goodbye!")
             break
         if low in ("/help", "/h"):
-            print("Type a message to chat. /course — structured courses with projects "
-                  "(/course start python) · /learn <subject> free-form tutor · /quiz "
-                  "<subject> · /review flashcards · /practice exam|embassy|work|"
-                  "interview|translator · /models · /model <n> · /resume last chat "
-                  "· ``` code paste block · /quit.")
+            print(text_banner(current_model, agent or tools_mode))
             continue
         if "stop practice" in low:
             history = [{"role": "system", "content": sys_prompt}]
@@ -1107,6 +1142,62 @@ def text_main(agent):
             if alt and alt != current_model:
                 current_model = alt
                 print(f"🔀 Switched to '{alt}' — please repeat your message.")
+
+
+def take_lecture_notes(engine, model, fp16, lang, llm_model, speaker):
+    """Record a long session (class, lecture video, meeting), transcribe it all,
+    then produce structured markdown notes + flashcards."""
+    import datetime
+    try:
+        title = input("📝 Lecture title (Enter = untitled): ").strip() or "untitled"
+    except EOFError:
+        return
+    safe = re.sub(r"[^\w\s-]", "", title).strip().replace(" ", "-").lower() or "untitled"
+    print("🔴 Recording the lecture — leave this running. Press Enter to STOP "
+          "and process. (Recording can be as long as you like; transcription of "
+          "a full lecture takes a while afterwards.)")
+    audio = engine.record_push_to_talk(wait_for_start=False)
+    if audio is None or len(audio) < voice.SAMPLE_RATE * 5:
+        print("Too short — nothing saved.")
+        return
+    minutes = len(audio) / voice.SAMPLE_RATE / 60
+    print(f"⏹️  {minutes:.1f} minutes recorded. Transcribing (this can take a while)...")
+    result = model.transcribe(audio.flatten().astype(np.float32), fp16=fp16,
+                              language=lang, condition_on_previous_text=False)
+    transcript = result["text"].strip()
+    if not transcript:
+        print("Nothing intelligible was transcribed.")
+        return
+    print(f"🧠 Structuring notes from {len(transcript.split())} words...")
+    import ollama
+    notes = transcript
+    try:
+        r = ollama.chat(model=llm_model, messages=[{
+            "role": "user",
+            "content": ("Turn this lecture transcript into clean markdown study "
+                        "notes with: a 3-sentence summary, the main topics as "
+                        "sections with key points, any definitions, and an 'Action "
+                        "items / follow-ups' section. Also end with a section "
+                        "'## Flashcards' containing 5 Q/A pairs formatted exactly "
+                        "as 'Q: ...' newline 'A: ...'.\n\nTranscript:\n"
+                        + transcript[:24000])}])
+        notes = "".join(strip_think(iter([r["message"]["content"]]))).strip() or transcript
+    except Exception as exc:
+        print(f"⚠️  Couldn't structure the notes ({exc}); saving raw transcript.")
+    notes_dir = os.path.expanduser("~/Documents/lecture-notes")
+    os.makedirs(notes_dir, exist_ok=True)
+    path = os.path.join(notes_dir,
+                        f"{datetime.date.today()}-{safe}.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"# {title}\n\n{notes}\n\n---\n## Full transcript\n\n{transcript}\n")
+    # Harvest the flashcards into the spaced-repetition deck.
+    import tools as T
+    added = 0
+    for q, a in re.findall(r"Q:\s*(.+?)\s*\nA:\s*(.+?)(?:\n|$)", notes):
+        if "already exists" not in T.flashcard_add(q.strip(), a.strip(), safe[:20]):
+            added += 1
+    print(f"💾 Notes saved to {path}" + (f" — {added} flashcards added." if added else ""))
+    speaker.say_blocking(f"Lecture notes saved. {added} flashcards created.")
 
 
 def dictate(engine, speaker, transcribe_final, model, gain_guard):
@@ -1389,6 +1480,10 @@ def main():
                     continue
                 if action == "dictate":
                     dictate(engine, speaker, transcribe_final, current_model, gain_guard)
+                    continue
+                if action == "notes":
+                    take_lecture_notes(engine, model, fp16, stt_context["lang"],
+                                       current_model, speaker)
                     continue
                 if action.startswith("practice:"):
                     parts = action.split(":", 2)
