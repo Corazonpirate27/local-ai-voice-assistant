@@ -75,40 +75,56 @@ _load_config()
 
 import voice
 
-# --- terminal UI helpers ----------------------------------------------------
+# --- terminal UI helpers (Claude-Code-style) ----------------------------------
 _TTY = sys.stdout.isatty()
 DIM = "\x1b[2m" if _TTY else ""
 CYAN = "\x1b[36m" if _TTY else ""
 GREEN = "\x1b[32m" if _TTY else ""
+ORANGE = "\x1b[38;5;209m" if _TTY else ""      # Claude's coral accent
+BOLD = "\x1b[1m" if _TTY else ""
 RESET = "\x1b[0m" if _TTY else ""
 SHOW_THINK = os.environ.get("VA_SHOW_THINK", "1") != "0"
 
+# Whimsical progress verbs, in the Claude Code tradition.
+_WHIMSY = ["Pondering", "Mulling", "Noodling", "Brewing", "Scheming", "Computing",
+           "Percolating", "Ruminating", "Conjuring", "Cogitating", "Simmering",
+           "Untangling", "Deliberating", "Marinating", "Crunching", "Divining"]
+
+
+def _term_width():
+    return shutil.get_terminal_size((80, 20)).columns
+
 
 class Spinner:
-    """Braille spinner with a status label, e.g. '⠋ Thinking…'. No-op when piped."""
-    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    """'✻ Pondering… (3s)' status line in the coral accent. No-op when piped."""
 
-    def __init__(self, label):
-        self.label = label
+    def __init__(self, label=None):
+        import random
+        self.label = label or (random.choice(_WHIMSY) + "…")
         self._stop = threading.Event()
         self._thread = None
 
     def start(self):
         if not _TTY:
-            print(f"… {self.label}")
+            print(f"✻ {self.label}")
             return self
+
         def run():
-            i = 0
+            t0 = time.monotonic()
+            phase = 0
+            glyphs = "✻✼✻✽"
             while not self._stop.is_set():
-                frame = self.FRAMES[i % len(self.FRAMES)]
-                width = shutil.get_terminal_size((80, 20)).columns
-                visible = f"{frame} {self.label}"
-                if len(visible) > width - 4:          # keep on ONE line (margin for emoji)
-                    visible = visible[:width - 5] + "…"
-                sys.stdout.write(f"\r\x1b[K{CYAN}{visible}{RESET}")
+                elapsed = int(time.monotonic() - t0)
+                suffix = f" {DIM}({elapsed}s){RESET}" if elapsed >= 2 else ""
+                visible = f"{self.label}"
+                width = _term_width()
+                if len(visible) > width - 12:
+                    visible = visible[:width - 13] + "…"
+                sys.stdout.write(f"\r\x1b[K{ORANGE}{glyphs[phase % len(glyphs)]}{RESET} "
+                                 f"{visible}{suffix}")
                 sys.stdout.flush()
-                i += 1
-                time.sleep(0.08)
+                phase += 1
+                time.sleep(0.25)
         self._thread = threading.Thread(target=run, daemon=True)
         self._thread.start()
         return self
@@ -116,7 +132,7 @@ class Spinner:
     def stop(self):
         self._stop.set()
         if self._thread:
-            self._thread.join(timeout=0.3)
+            self._thread.join(timeout=0.4)
         if _TTY:
             sys.stdout.write("\r\x1b[K")
             sys.stdout.flush()
@@ -126,6 +142,19 @@ class Spinner:
 
     def __exit__(self, *exc):
         self.stop()
+
+
+def claude_input():
+    """Claude-Code-style bordered input box. Returns the entered text."""
+    if not _TTY:
+        return input("> ")
+    width = min(_term_width() - 1, 100)
+    print(f"{DIM}╭{'─' * (width - 2)}╮{RESET}")
+    try:
+        text = input(f"{DIM}│{RESET} > ")
+    finally:
+        print(f"{DIM}╰{'─' * (width - 2)}╯{RESET}")
+    return text
 
 
 def agent_system_prompt():
@@ -635,7 +664,7 @@ def respond(history, speaker, engine, vad, model, barge_in=True):
             if interrupt.is_set():
                 break
             if not printed_prefix:
-                print("Assistant:", end=" ", flush=True)
+                print(f"{ORANGE}⏺{RESET} ", end="", flush=True)
                 printed_prefix = True
             print(sentence, end=" ", flush=True)
             speakable = sanitize_for_tts(sentence)
@@ -774,18 +803,40 @@ HELP_ROWS = [
 ]
 
 
-def text_banner(model, agent):
-    """Startup screen for text mode: identity + the full command reference."""
-    lines = ["", f"{CYAN}╭─ 🎙  Voice Assistant — text chat ─────────────────────────────╮{RESET}",
-             f"  Model: {GREEN}{model_label(model)}{RESET}"
-             + (f"   Tools: {GREEN}on{RESET}" if agent else "   Tools: off (start with --agent)")]
+def help_table():
+    """The full command reference (shown by /help)."""
+    lines = []
     for cmd, desc in HELP_ROWS:
         if not desc:
-            lines.append(f"{CYAN}├─ {cmd} ─{RESET}")
+            lines.append(f"\n {ORANGE}{cmd}{RESET}")
         else:
-            lines.append(f"  {GREEN}{cmd:<29}{RESET}{DIM}{desc}{RESET}")
-    lines.append(f"{CYAN}╰─ just type to chat — e.g. \"search the news\", \"open spotify\" ─╯{RESET}")
+            lines.append(f"  {BOLD}{cmd:<29}{RESET}{DIM}{desc}{RESET}")
     return "\n".join(lines) + "\n"
+
+
+def text_banner(model, agent):
+    """Claude-Code-style welcome box."""
+    width = min(_term_width() - 1, 74)
+    inner = width - 2
+
+    def row(text="", pad=1):
+        vis = re.sub(r"\x1b\[[0-9;]*m", "", text)
+        return (f"{DIM}│{RESET}" + " " * pad + text
+                + " " * max(0, inner - pad - len(vis)) + f"{DIM}│{RESET}")
+
+    cwd = os.getcwd().replace(os.path.expanduser("~"), "~")
+    tools = f"{GREEN}on{RESET}" if agent else f"{DIM}off (--agent to enable){RESET}"
+    return "\n".join([
+        "",
+        f"{DIM}╭{'─' * inner}╮{RESET}",
+        row(f"{ORANGE}✻{RESET} {BOLD}Voice Assistant{RESET}"),
+        row(),
+        row(f"{DIM}model:{RESET} {model_label(model)}", pad=3),
+        row(f"{DIM}tools:{RESET} " + tools + f"   {DIM}cwd:{RESET} {cwd}", pad=3),
+        row(f"{DIM}/help for commands · /course to study · /quit to exit{RESET}", pad=3),
+        f"{DIM}╰{'─' * inner}╯{RESET}",
+        "",
+    ])
 
 
 # --- conversation persistence ---------------------------------------------------
@@ -859,7 +910,7 @@ def respond_text(history, model):
                 print(RESET)          # close the thinking line
                 in_think = False
             if not in_answer:
-                print(f"{GREEN}assistant>{RESET} ", end="", flush=True)
+                print(f"{ORANGE}⏺{RESET} ", end="", flush=True)
                 in_answer = True
             print(text, end="", flush=True)
             reply.append(text)
@@ -898,7 +949,7 @@ def text_main(agent):
     active_toolset = None     # study/review sessions bring their own tool subset
     while True:
         try:
-            text = input("you> ").strip()
+            text = claude_input().strip()
         except (EOFError, KeyboardInterrupt):
             save_chat(history)
             print("\nGoodbye!")
@@ -915,7 +966,7 @@ def text_main(agent):
             print(f"↩️  Resumed {os.path.basename(path)} "
                   f"({len(old)} messages). Last reply:")
             if last:
-                print(f"{GREEN}assistant>{RESET} {str(last[-1]['content'])[:300]}")
+                print(f"{ORANGE}⏺{RESET} {str(last[-1]['content'])[:300]}")
             continue
         if text.startswith("```"):
             # Multi-line paste: keep reading until a closing ``` line.
@@ -942,7 +993,7 @@ def text_main(agent):
             print("Goodbye!")
             break
         if low in ("/help", "/h"):
-            print(text_banner(current_model, agent or bool(active_toolset)))
+            print(help_table())
             continue
         if "stop practice" in low:
             history = [{"role": "system", "content": sys_prompt}]
@@ -1299,7 +1350,7 @@ def agent_respond(history, speaker, model, confirm_shell, max_steps=6, toolset=N
         if answer:
             if steps["n"]:
                 print()                      # separate the answer from tool steps
-            print(f"{GREEN}assistant>{RESET} {answer}")
+            print(f"{ORANGE}⏺{RESET} {answer}")
         speaker.begin(interrupt)
         for sentence in stream_sentences(iter([answer])):
             speakable = sanitize_for_tts(sentence)
@@ -1312,7 +1363,7 @@ def agent_respond(history, speaker, model, confirm_shell, max_steps=6, toolset=N
     steps = {"n": 0}
     for _ in range(max_steps):
         try:
-            with Spinner("Thinking…"):
+            with Spinner():
                 r = ollama.chat(model=model, messages=history,
                                 tools=toolset if toolset is not None else T.GENERAL_TOOLS)
         except Exception as exc:
