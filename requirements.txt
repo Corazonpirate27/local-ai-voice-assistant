@@ -1,0 +1,16 @@
+# Core runtime deps for the local voice assistant.
+# Install into a venv:  pip install -r requirements.txt
+openai-whisper      # speech-to-text
+silero-vad          # neural voice activity detection (listening/endpointing)
+sounddevice         # microphone capture + interruptible playback
+scipy               # wav read/write
+numpy               # audio buffers
+ollama              # local LLM client (streaming + tool calling + vision)
+ddgs                # web search (DuckDuckGo, no API key)
+httpx               # weather (Open-Meteo), page fetching, Tavily
+openwakeword        # wake-word detection ("hey jarvis") for --wake mode
+coqui-tts           # natural neural text-to-speech (VITS by default)
+torchcodec          # audio IO backend required by coqui-tts (needs ffmpeg<=7 for XTTS)
+# espeak-ng (system binary) is used as an automatic TTS fallback if Coqui can't load.
+# pactl (PulseAudio/PipeWire) is used for --aec echo cancellation and the
+# automatic input-gain guard; both degrade gracefully without it.

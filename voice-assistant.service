@@ -1,0 +1,20 @@
+[Unit]
+Description=Voice Assistant (wake-word, agent mode)
+# Needs the user session's audio (PipeWire) and D-Bus.
+After=default.target pipewire.service
+Wants=pipewire.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/voice-assistant
+ExecStart=%h/voice-assistant/venv/bin/python %h/voice-assistant/assistant.py --wake --agent
+Restart=on-failure
+RestartSec=5
+# Wake mode needs no terminal; shell confirmations auto-decline without a TTY.
+StandardInput=null
+StandardOutput=append:%h/.local/share/voice-assistant.log
+StandardError=inherit
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

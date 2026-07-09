@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+mic_input.wav
+va_mic_input.wav
+*.log
+.pytest_cache/
