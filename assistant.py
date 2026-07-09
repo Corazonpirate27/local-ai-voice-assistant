@@ -1251,6 +1251,37 @@ def dictate(engine, speaker, transcribe_final, model, gain_guard):
     speaker.say_blocking("Dictation saved.")
 
 
+def _wrap_lines(text, width, lines_max=3):
+    """Wrap text to at most lines_max lines of the given width."""
+    text = " ".join(str(text).split())
+    out = []
+    while text and len(out) < lines_max:
+        if len(text) <= width:
+            out.append(text)
+            text = ""
+            break
+        cut = text.rfind(" ", 0, width)
+        cut = cut if cut > width // 2 else width
+        out.append(text[:cut])
+        text = text[cut:].strip()
+    if text and out:
+        out[-1] = out[-1][:max(0, width - 1)] + "…"
+    return out
+
+
+def print_tool_step(label, result, elapsed):
+    """Render one completed tool call, Claude-Code style:
+        ⏺ 🔍 Searching the web: … (1.2s)
+          ⎿ Search results for '…': …"""
+    took = f" {DIM}({elapsed:.1f}s){RESET}" if elapsed >= 0.05 else ""
+    print(f"{GREEN}⏺{RESET} {label}{took}")
+    width = max(40, shutil.get_terminal_size((100, 20)).columns - 6)
+    lines = _wrap_lines(result, width) or ["(no output)"]
+    print(f"  {CYAN}⎿{RESET} {DIM}{lines[0]}{RESET}")
+    for ln in lines[1:]:
+        print(f"    {DIM}{ln}{RESET}")
+
+
 def agent_respond(history, speaker, model, confirm_shell, max_steps=6):
     """
     Agentic turn: let the model call tools (open apps, volume, brightness, shell)
@@ -1277,6 +1308,8 @@ def agent_respond(history, speaker, model, confirm_shell, max_steps=6):
             print()
         answer = answer.strip()
         if answer:
+            if steps["n"]:
+                print()                      # separate the answer from tool steps
             print(f"{GREEN}assistant>{RESET} {answer}")
         speaker.begin(interrupt)
         for sentence in stream_sentences(iter([answer])):
@@ -1287,6 +1320,7 @@ def agent_respond(history, speaker, model, confirm_shell, max_steps=6):
         return answer or "[said nothing]"
 
     interrupt = threading.Event()
+    steps = {"n": 0}
     for _ in range(max_steps):
         try:
             with Spinner("Thinking…"):
@@ -1314,16 +1348,15 @@ def agent_respond(history, speaker, model, confirm_shell, max_steps=6):
         for c in norm:
             fn, args = c["function"]["name"], c["function"]["arguments"]
             label = activity_label(fn, args)
+            t0 = time.monotonic()
             if fn == "run_shell":                       # needs interactive confirm; no spinner
                 print(f"{CYAN}▶{RESET} {label}")
                 result = T.dispatch(fn, args, confirm=confirm_shell)
             else:
                 with Spinner(label):
                     result = T.dispatch(fn, args, confirm=confirm_shell)
-            summary = str(result).replace("\n", " ")
-            if len(summary) > 100:
-                summary = summary[:100] + "…"
-            print(f"{CYAN}✓{RESET} {label}\n  {DIM}{summary}{RESET}")
+            print_tool_step(label, result, time.monotonic() - t0)
+            steps["n"] += 1
             history.append({"role": "tool", "content": str(result), "tool_name": fn})
 
     speaker.say_blocking("Sorry, I couldn't finish that.")
@@ -1425,8 +1458,10 @@ def main():
     sys_prompt = SYSTEM_PROMPT
     if agent:
         sys_prompt = agent_system_prompt()
-        print("🤖 Agent mode ON — I can open apps and control the system. "
-              "Shell commands ask for confirmation.\n")
+        print(f"{CYAN}╭──────────────────────────────────────────────────────────╮{RESET}\n"
+              f"{CYAN}│{RESET} 🤖 {GREEN}Agent mode{RESET} — apps · system · web · documents · vision {CYAN}│{RESET}\n"
+              f"{CYAN}│{RESET} {DIM}Shell commands always ask you before running.{RESET}            {CYAN}│{RESET}\n"
+              f"{CYAN}╰──────────────────────────────────────────────────────────╯{RESET}\n")
 
     def confirm_shell(cmd):
         print(f"\n⚠️  The assistant wants to run a shell command:\n    {cmd}")
