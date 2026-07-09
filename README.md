@@ -49,6 +49,7 @@ Python packages: `pip install -r requirements.txt`
 ./venv/bin/python assistant.py --no-barge-in  # don't allow interruption
 ./venv/bin/python assistant.py --no-live      # transcribe after you finish, not live
 ./venv/bin/python assistant.py --list-devices # show devices for VA_INPUT/OUTPUT_DEVICE
+./venv/bin/python assistant.py --doctor       # self-check: deps, models, audio, GPU
 ```
 
 - **Hands-free (default):** just start talking; the neural VAD captures your
@@ -293,8 +294,8 @@ Live transcription heavy on the GPU → `VA_STT_LIVE_MODEL=tiny` or `--no-live`.
   - `LiveTranscriber` — live partials + speculative final transcription.
   - `Speaker` — streaming, interruptible TTS playback (Coqui VITS → espeak-ng).
   - `EchoCancel` / `InputGain` — system AEC routing and the clipping guard.
-- **`transcribe.py`** / **`live_transcribe.py`** — early standalone demos, kept
-  for reference.
+- **`transcribe.py`** — tiny file-based transcription demo.
+- **`courses.py`** — course curricula and progress; **`telegram_bot.py`** — phone bridge.
 
 ## Hardware note: the mic that cried wolf
 

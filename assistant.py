@@ -24,6 +24,7 @@ Usage:
     python assistant.py --aec          # + echo cancellation (best with speakers)
     python assistant.py --no-live      # transcribe after you finish, not live
     python assistant.py --list-devices # show audio devices for VA_*_DEVICE
+    python assistant.py --doctor       # self-check dependencies and print fixes
 
 Config via environment variables:
     VA_MODE            auto | push                       (default: push)
@@ -294,28 +295,9 @@ def print_partial(text, is_final):
 
 def strip_think(token_iter):
     """Drop <think>...</think> reasoning blocks (deepseek-r1 etc.) from a stream."""
-    buffer, inside = "", False
-    for token in token_iter:
-        buffer += token
-        while True:
-            if inside:
-                end = buffer.find("</think>")
-                if end < 0:
-                    buffer = buffer[-8:]        # keep a possible partial closing tag
-                    break
-                buffer, inside = buffer[end + 8:], False
-            else:
-                start = buffer.find("<think>")
-                if start < 0:
-                    if len(buffer) > 7:         # hold back a possible partial tag
-                        yield buffer[:-7]
-                        buffer = buffer[-7:]
-                    break
-                if start:
-                    yield buffer[:start]
-                buffer, inside = buffer[start + 7:], True
-    if buffer and not inside:
-        yield buffer
+    for kind, text in split_think_stream(token_iter):
+        if kind == "answer":
+            yield text
 
 
 def stream_sentences(token_iter):
@@ -913,7 +895,7 @@ def text_main(agent):
     print(text_banner(current_model, agent))
 
     history = [{"role": "system", "content": sys_prompt}]
-    tools_mode = False        # /learn and /review need tools even without --agent
+    active_toolset = None     # study/review sessions bring their own tool subset
     while True:
         try:
             text = input("you> ").strip()
@@ -960,7 +942,7 @@ def text_main(agent):
             print("Goodbye!")
             break
         if low in ("/help", "/h"):
-            print(text_banner(current_model, agent or tools_mode))
+            print(text_banner(current_model, agent or bool(active_toolset)))
             continue
         if "stop practice" in low:
             history = [{"role": "system", "content": sys_prompt}]
@@ -1020,11 +1002,13 @@ def text_main(agent):
                 if alt:
                     current_model = alt
                     print(f"🔀 Using {model_label(alt)} for the course.")
-            tools_mode = True
+            import tools as _T
+            active_toolset = _T.STUDY_TOOLS
             print("📚 " + courses.syllabus(sub) + "\n")
             history = [{"role": "system", "content": course_tutor_prompt(sub)},
                        {"role": "user", "content": "I'm ready — let's continue the course."}]
-            agent_respond(history, speaker, current_model, confirm_shell)
+            agent_respond(history, speaker, current_model, confirm_shell,
+                          toolset=active_toolset)
             continue
 
         if low.startswith("/review"):
@@ -1038,7 +1022,8 @@ def text_main(agent):
                 if alt:
                     current_model = alt
                     print(f"🔀 Using {model_label(alt)} for the review.")
-            tools_mode = True
+            import tools as _T
+            active_toolset = _T.REVIEW_TOOLS
             history = [{"role": "system", "content":
                         "You are running a flashcard review session. The due cards "
                         "are listed below. For ONE card at a time: show its question "
@@ -1049,7 +1034,8 @@ def text_main(agent):
                         "give a short summary.\n\n" + due},
                        {"role": "user", "content": "I'm ready, start the review."}]
             print("📇 Flashcard review — answer each question. /learn off to stop.")
-            agent_respond(history, speaker, current_model, confirm_shell)
+            agent_respond(history, speaker, current_model, confirm_shell,
+                          toolset=active_toolset)
             continue
 
         if low.startswith("/learn") or low.startswith("/quiz"):
@@ -1057,7 +1043,7 @@ def text_main(agent):
             args = text.split()[1:]
             subj = args[0].lower() if args else ""
             if subj in ("off", "stop"):
-                tools_mode = False
+                active_toolset = None
                 history = [{"role": "system", "content": sys_prompt}]
                 print("🎓 Learning mode off.")
                 continue
@@ -1069,13 +1055,15 @@ def text_main(agent):
             if best and best != current_model:
                 current_model = best
                 print(f"🔀 Using {model_label(best)} for this subject.")
-            tools_mode = supports_tools(current_model)   # tutor gets run_python etc.
+            import tools as _T
+            active_toolset = _T.STUDY_TOOLS if supports_tools(current_model) else None
             history = [{"role": "system", "content": tutor_prompt(subj, quiz)},
                        {"role": "user", "content": "Let's begin."}]
             print(f"🎓 {'Quiz' if quiz else 'Tutor'}: {subj} — progress is saved "
                   "automatically. /learn off to stop. Paste code with ``` blocks.")
-            if tools_mode:
-                agent_respond(history, speaker, current_model, confirm_shell)
+            if active_toolset:
+                agent_respond(history, speaker, current_model, confirm_shell,
+                              toolset=active_toolset)
             else:
                 reply = respond_text(history, current_model)
                 history.append({"role": "assistant", "content": reply or "[...]"})
@@ -1130,15 +1118,16 @@ def text_main(agent):
 
         history.append({"role": "user", "content": text})
         try:
-            if agent or tools_mode:
-                agent_respond(history, speaker, current_model, confirm_shell)
+            if agent or active_toolset:
+                agent_respond(history, speaker, current_model, confirm_shell,
+                              toolset=active_toolset)
             else:
                 reply = respond_text(history, current_model)
                 history.append({"role": "assistant", "content": reply or "[said nothing]"})
         except Exception as exc:                       # never crash the conversation
             history.pop()
             print(f"⚠️  '{current_model}' failed: {exc}")
-            alt = pick_tool_model(available_models()) if (agent or tools_mode) else None
+            alt = pick_tool_model(available_models()) if (agent or active_toolset) else None
             if alt and alt != current_model:
                 current_model = alt
                 print(f"🔀 Switched to '{alt}' — please repeat your message.")
@@ -1282,7 +1271,7 @@ def print_tool_step(label, result, elapsed):
         print(f"    {DIM}{ln}{RESET}")
 
 
-def agent_respond(history, speaker, model, confirm_shell, max_steps=6):
+def agent_respond(history, speaker, model, confirm_shell, max_steps=6, toolset=None):
     """
     Agentic turn: let the model call tools (open apps, volume, brightness, shell)
     in a loop until it produces a final spoken answer. `history` already ends with
@@ -1324,7 +1313,8 @@ def agent_respond(history, speaker, model, confirm_shell, max_steps=6):
     for _ in range(max_steps):
         try:
             with Spinner("Thinking…"):
-                r = ollama.chat(model=model, messages=history, tools=T.TOOLS)
+                r = ollama.chat(model=model, messages=history,
+                                tools=toolset if toolset is not None else T.GENERAL_TOOLS)
         except Exception as exc:
             if "does not support tools" not in str(exc).lower():
                 raise
@@ -1363,7 +1353,81 @@ def agent_respond(history, speaker, model, confirm_shell, max_steps=6):
     return "[agent stopped: too many tool steps]"
 
 
+def doctor():
+    """Self-check: verify every dependency the assistant needs and print fixes."""
+    ok = lambda: print(f"  {GREEN}✓{RESET}", end=" ")
+    bad = lambda: print(f"  ✗", end=" ")
+    print(f"{CYAN}🩺 Voice assistant self-check{RESET}\n")
+
+    print("Ollama")
+    try:
+        models = available_models()
+        ok(); print(f"server running, {len(models)} chat models")
+        if pick_tool_model(models):
+            ok(); print(f"tool-capable model: {pick_tool_model(models)}")
+        else:
+            bad(); print("no tool-capable model — fix: ollama pull qwen3:4b")
+        import ollama
+        names = [m.model if hasattr(m, 'model') else m.get('model', '') for m in
+                 (ollama.list().get('models', []) if isinstance(ollama.list(), dict)
+                  else getattr(ollama.list(), 'models', []))]
+        if any("embed" in (n or "") for n in names):
+            ok(); print("embedding model (document Q&A)")
+        else:
+            bad(); print("no embedding model — fix: ollama pull nomic-embed-text")
+    except Exception as exc:
+        bad(); print(f"Ollama unreachable ({exc}) — fix: ollama serve")
+
+    print("Audio")
+    try:
+        import sounddevice as sd
+        ins = [d for d in sd.query_devices() if d["max_input_channels"] > 0]
+        outs = [d for d in sd.query_devices() if d["max_output_channels"] > 0]
+        (ok() if ins else bad()); print(f"microphone devices: {len(ins)}")
+        (ok() if outs else bad()); print(f"output devices: {len(outs)}")
+    except Exception as exc:
+        bad(); print(f"sounddevice failed: {exc}")
+    (ok() if shutil.which("espeak-ng") else bad())
+    print("espeak-ng (TTS fallback / Nepali)" if shutil.which("espeak-ng")
+          else "espeak-ng missing — fix: sudo dnf install espeak-ng")
+
+    print("Speech & GPU")
+    try:
+        import torch
+        if torch.cuda.is_available():
+            free, total = torch.cuda.mem_get_info()
+            ok(); print(f"GPU: {torch.cuda.get_device_name(0)} "
+                        f"({free // 1024**2} MB free of {total // 1024**2} MB)")
+        else:
+            bad(); print("no CUDA — Whisper/TTS will run on CPU (works, slower)")
+        import whisper  # noqa: F401
+        ok(); print("whisper importable")
+    except Exception as exc:
+        bad(); print(f"torch/whisper problem: {exc}")
+
+    print("Extras")
+    for binname, what, fix in [
+            ("tesseract", "OCR", "sudo dnf install tesseract"),
+            ("wl-paste", "clipboard", "sudo dnf install wl-clipboard"),
+            ("notify-send", "desktop notifications", "sudo dnf install libnotify"),
+            ("gdbus", "media control / screenshots", "(part of glib2)")]:
+        (ok() if shutil.which(binname) else bad())
+        print(f"{what} ({binname})" if shutil.which(binname)
+              else f"{what} missing — fix: {fix}")
+    cfg = os.path.expanduser("~/.config/voice-assistant/config.toml")
+    (ok() if os.path.exists(cfg) else bad())
+    print("config file" if os.path.exists(cfg)
+          else "no config file — optional: cp config.example.toml " + cfg)
+    (ok() if os.environ.get("VA_TAVILY_KEY") else bad())
+    print("Tavily search key" if os.environ.get("VA_TAVILY_KEY")
+          else "no Tavily key — optional, better web search: tavily.com")
+    print(f"\n{DIM}Run the test suite with: ./venv/bin/python -m pytest tests/ -q{RESET}")
+
+
 def main():
+    if "--doctor" in sys.argv:
+        doctor()
+        return
     if "--list-devices" in sys.argv:
         import sounddevice as sd
         print(sd.query_devices())

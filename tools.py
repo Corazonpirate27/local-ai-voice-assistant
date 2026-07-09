@@ -1693,6 +1693,32 @@ TOOLS = [
 ]
 
 
+# --- per-mode tool subsets ---------------------------------------------------------
+# Small local models pick tools more reliably from a short, relevant list, so each
+# mode exposes only what it needs instead of the full catalogue.
+_STUDY_ONLY = {"flashcard_add", "flashcards_due", "flashcard_answer", "flashcard_grade",
+               "save_progress", "create_project_file", "review_project", "run_project",
+               "run_python"}
+
+
+def subset(names):
+    names = set(names)
+    return [t for t in TOOLS if t["function"]["name"] in names]
+
+
+# Everyday agent: everything except the study-session machinery.
+GENERAL_TOOLS = [t for t in TOOLS if t["function"]["name"] not in _STUDY_ONLY]
+
+# Tutor/course sessions: teaching, code, math, projects, references.
+STUDY_TOOLS = subset(_STUDY_ONLY | {
+    "calculate", "web_search", "fetch_webpage", "read_document", "ask_document",
+    "youtube_transcript", "notify_desktop"})
+
+# Flashcard review: just the deck plus a calculator.
+REVIEW_TOOLS = subset({"flashcards_due", "flashcard_answer", "flashcard_grade",
+                       "flashcard_add", "calculate"})
+
+
 def dispatch(name, args, confirm=None):
     """Execute a tool by name. `confirm(command)->bool` gates run_shell."""
     args = args or {}
