@@ -164,6 +164,35 @@ CURRICULA = {
              "A complete CLI tool published as a proper repository"),
         ],
     },
+    "english": {
+        "title": "English: Beginner to Advanced",
+        "modules": [
+            ("Foundations", "sentence structure (S+V+O), parts of speech, a/an/the "
+             "basics, present simple & continuous — with common Nepali-speaker slips",
+             "Write a 10-sentence self-introduction; the tutor corrects it line by line"),
+            ("Everyday English", "questions & negatives, past simple/continuous, "
+             "everyday vocabulary: home, food, travel, numbers, time",
+             "Describe your daily routine (12+ sentences) and write a short shop dialogue"),
+            ("Plans & requests", "future forms (will / going to / present continuous), "
+             "polite requests, offers, suggestions, phone English",
+             "Write a phone conversation booking an appointment, then role-play it"),
+            ("Intermediate grammar", "present perfect vs past, conditionals 0-2, "
+             "comparatives, articles & prepositions (the classic hard parts)",
+             "Write a 200-word story about a memorable day; grammar-graded"),
+            ("Conversation skills", "small talk, giving opinions, agreeing/disagreeing "
+             "politely, phrasal verbs, connectors (however, although, therefore)",
+             "Write an opinion piece (150 words), then debate the tutor on it"),
+            ("Writing well", "paragraph structure, formal vs informal emails, "
+             "punctuation, linking ideas, avoiding run-ons",
+             "Write one informal email and one formal email/cover letter"),
+            ("Advanced English", "passive voice, reported speech, conditionals 3, "
+             "idioms, academic vocabulary, tone and nuance",
+             "Write a 300-word argumentative essay; revised to publication quality"),
+            ("Mastery & real world", "IELTS/TOEFL-style speaking & writing tasks, "
+             "presentations, summarizing, interview English",
+             "Write and polish a full Statement of Purpose (SOP) for study abroad"),
+        ],
+    },
     "webdev": {
         "title": "Web Development Full Path",
         "modules": [

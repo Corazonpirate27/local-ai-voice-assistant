@@ -163,7 +163,7 @@ type `/resume` to continue the most recent one. Voice sessions save too.
 
 ## Study mode 📚 — structured courses with projects (`/course`)
 
-Full CS50-style courses in eight domains, each 7–8 modules with a hands-on
+Full CS50-style courses in nine domains, each 7–8 modules with a hands-on
 project per module and a capstone:
 
 ```

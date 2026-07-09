@@ -501,6 +501,9 @@ LEARN_SUBJECTS = {
                  ("qwen3:8b", "qwen3", "qwen2.5-coder")),
     "ai": ("artificial intelligence and machine learning (concepts, math, and code)",
            ("qwen3:8b", "qwen3", "qwen2.5-coder")),
+    "english": ("the English language — grammar, vocabulary, conversation and "
+                "writing, with awareness of common mistakes made by Nepali speakers",
+                ("qwen3:8b", "qwen3", "gemma3")),
 }
 
 
@@ -791,7 +794,7 @@ def load_whisper(name):
 HELP_ROWS = [
     ("STUDY", ""),
     ("/course",              "structured courses — continue where you left off"),
-    ("/course list",         "the 8 courses (python, cs, math, physics, ai, cybersec, software-eng, webdev)"),
+    ("/course list",         "the 9 courses (python, cs, math, physics, ai, cybersec, software-eng, webdev, english)"),
     ("/course start <name>", "enroll and begin module 1"),
     ("/course syllabus",     "your position in each course"),
     ("/course done",         "finish the current module → unlock the next"),
@@ -1026,7 +1029,7 @@ def text_main(agent):
                 else:
                     print("📚 Courses:\n" + courses.list_courses())
                     print("\nStart one with: /course start python   "
-                          "(or cs, math, physics, ai, cybersec, software-eng, webdev)")
+                          "(or cs, math, physics, ai, cybersec, software-eng, webdev, english)")
                     continue
             if sub == "start":
                 key = args[1].lower() if len(args) > 1 else ""

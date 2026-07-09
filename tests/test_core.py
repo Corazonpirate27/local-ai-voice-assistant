@@ -164,7 +164,7 @@ def test_app_aliases_resolve_missing_app_honestly():
 def test_course_lifecycle(tmp_path):
     import courses
     courses.COURSES_FILE = str(tmp_path / "courses.json")
-    assert len(courses.CURRICULA) == 8
+    assert len(courses.CURRICULA) == 9
     assert courses.start_course("python")["module"] == 0
     assert "Module 1 of 8" in courses.module_brief("python")
     courses.advance_course("python")
