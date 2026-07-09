@@ -166,7 +166,7 @@ def test_course_lifecycle(tmp_path):
     courses.COURSES_FILE = str(tmp_path / "courses.json")
     assert len(courses.CURRICULA) == 9
     assert courses.start_course("python")["module"] == 0
-    assert "Module 1 of 8" in courses.module_brief("python")
+    assert "Module 1 of 12" in courses.module_brief("python")
     courses.advance_course("python")
     assert courses.course_state("python")["module"] == 1
     for _ in range(10):
