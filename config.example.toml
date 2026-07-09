@@ -1,0 +1,16 @@
+# Voice assistant configuration.
+# Copy to ~/.config/voice-assistant/config.toml — every key becomes a VA_* setting
+# (env vars set at launch still override). All keys are optional.
+
+llm_model = "gemma3:4b"          # default chat model (agent mode auto-picks a tool model)
+mode = "push"                    # push | auto | wake
+# agent = true                   # always start with agent tools on
+# voice_gender = "male"          # male | female
+# whisper_model = "small"        # tiny | base | small | medium
+# lang = "en"                    # or "auto" / "ne" for Nepali speech input
+# city = "Kathmandu"             # default city for weather/briefing
+# tavily_key = "tvly-..."        # better web search (free key from tavily.com)
+# vad_silence = 0.8              # seconds of pause that ends an utterance
+# barge_in = false               # allow interrupting the assistant by talking
+# wake_word = "hey_jarvis"       # hey_jarvis | hey_marvin | hey_mycroft | alexa
+# show_think = true              # show model reasoning dimmed

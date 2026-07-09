@@ -114,6 +114,37 @@ genders (GPU-accelerated):
 VA_SPEAKER_ID=p230 ./venv/bin/python assistant.py   # any of VCTK's 109 speakers
 ```
 
+## More tools & modes
+
+- **🗣️ Live translator** — practice section `Translator`: speak Nepali, it speaks
+  English; speak English, it answers in नेपाली (Whisper auto-language + Nepali TTS).
+- **📇 Flashcards (spaced repetition)** — tutors create cards for what you get
+  wrong; `/review` quizzes the cards due today (SM-2-style scheduling); the daily
+  briefing reminds you how many are due.
+- **✍️ Dictation** — press `[d]` in the voice menu: speech is typed into a
+  document chunk by chunk; on "stop dictation" it saves a grammar-cleaned version
+  plus the raw transcript to `~/Documents/`.
+- **👁️ OCR** — "read the text in this screenshot" (tesseract, vision fallback).
+- **📋 Clipboard** — "summarize my clipboard", "explain this error I copied".
+- **📊 System** — "how's my battery?" (battery/disk/memory/CPU).
+
+## Configuration file
+
+Copy `config.example.toml` to `~/.config/voice-assistant/config.toml` — every key
+becomes a `VA_*` setting so you don't have to pass env vars each launch (env vars
+still override the file).
+
+## Conversations persist
+
+Text chats are auto-saved on exit to `~/.local/share/voice-assistant/chats/`;
+type `/resume` to continue the most recent one. Voice sessions save too.
+
+## Tests
+
+```bash
+./venv/bin/python -m pytest tests/ -q     # 21 tests, ~2s, no audio/network needed
+```
+
 ## Learning mode 🎓 (`/learn`, `/quiz`)
 
 A personal tutor with real teaching mechanics, in text mode (`--text --agent`):

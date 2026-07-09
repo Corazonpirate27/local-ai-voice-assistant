@@ -758,6 +758,148 @@ def ask_document(path, question, top_k=4):
             + "\n\nAnswer the user's question using these passages.")
 
 
+# --- OCR, clipboard, system status ------------------------------------------------
+def read_text_from_image(path):
+    """Extract the text in an image (screenshot, photo of a page). Uses tesseract
+    OCR when available, falling back to the vision model."""
+    p = os.path.realpath(os.path.expanduser(path or ""))
+    if not os.path.isfile(p):
+        return f"No image found at {path}."
+    if shutil.which("tesseract"):
+        out = _run(["tesseract", p, "-", "--psm", "3"], timeout=30)
+        if out and out not in ("done",) and len(out.strip()) > 3:
+            return f"Text found in {os.path.basename(p)}:\n{out.strip()[:4000]}"
+    try:
+        return _describe_with_vision(
+            p, "Transcribe ALL text visible in this image, exactly as written.")
+    except Exception as exc:
+        return f"Couldn't read text from the image: {exc}"
+
+
+def get_clipboard():
+    """Read the current clipboard contents (Wayland/X11)."""
+    for cmd in (["wl-paste", "--no-newline"], ["xclip", "-selection", "clipboard", "-o"]):
+        if shutil.which(cmd[0]):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                text = (r.stdout or "").strip()
+                if text:
+                    return f"Clipboard contents:\n{text[:4000]}"
+                return "The clipboard is empty (or holds non-text content)."
+            except Exception:
+                continue
+    return "No clipboard tool available."
+
+
+def system_status():
+    """Battery, disk, memory and CPU load summary."""
+    parts = []
+    for bat in glob.glob("/sys/class/power_supply/BAT*"):
+        try:
+            with open(f"{bat}/capacity") as f:
+                cap = f.read().strip()
+            with open(f"{bat}/status") as f:
+                st = f.read().strip()
+            parts.append(f"Battery: {cap}% ({st.lower()})")
+        except OSError:
+            pass
+    try:
+        du = shutil.disk_usage(os.path.expanduser("~"))
+        parts.append(f"Disk: {du.free // 1024**3} GB free of {du.total // 1024**3} GB")
+    except OSError:
+        pass
+    try:
+        with open("/proc/meminfo") as f:
+            mem = {l.split(":")[0]: int(l.split()[1]) for l in f if ":" in l}
+        parts.append(f"Memory: {mem['MemAvailable'] // 1024} MB free of "
+                     f"{mem['MemTotal'] // 1024} MB")
+    except Exception:
+        pass
+    try:
+        load = os.getloadavg()[0]
+        parts.append(f"CPU load: {load:.1f}")
+    except OSError:
+        pass
+    return ". ".join(parts) if parts else "Couldn't read system status."
+
+
+# --- flashcards with spaced repetition (SM-2-style) --------------------------------
+CARDS_FILE = os.path.expanduser(os.environ.get("VA_CARDS_FILE", "~/.voice_assistant_cards.json"))
+_INTERVALS = [1, 3, 7, 16, 35, 90]      # days per consecutive success
+
+
+def _load_cards():
+    import json
+    try:
+        with open(CARDS_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, list) else []
+    except Exception:
+        return []
+
+
+def _save_cards(cards):
+    import json
+    try:
+        with open(CARDS_FILE, "w", encoding="utf-8") as f:
+            json.dump(cards, f, ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+
+
+def flashcard_add(front, back, subject="general"):
+    """Create a flashcard. The tutor calls this for things the student got wrong."""
+    from datetime import date
+    if not front or not back:
+        return "A flashcard needs both a front (question) and a back (answer)."
+    cards = _load_cards()
+    if any(c["front"].lower() == front.lower() for c in cards):
+        return "A card with that question already exists."
+    cards.append({"id": max((c["id"] for c in cards), default=0) + 1,
+                  "front": front, "back": back, "subject": subject.lower(),
+                  "level": 0, "due": str(date.today())})
+    _save_cards(cards)
+    return f"Flashcard #{cards[-1]['id']} added ({subject})."
+
+
+def flashcards_due(subject=None):
+    """List the cards due for review today (id, subject and question only)."""
+    from datetime import date
+    today = str(date.today())
+    cards = [c for c in _load_cards() if c["due"] <= today
+             and (not subject or c["subject"] == subject.lower())]
+    if not cards:
+        return "No flashcards are due for review. 🎉"
+    lines = [f"- card {c['id']} [{c['subject']}]: {c['front']}" for c in cards[:20]]
+    return f"{len(cards)} card(s) due:\n" + "\n".join(lines)
+
+
+def flashcard_grade(card_id, result):
+    """Record a review result ('pass' or 'fail') and reschedule the card."""
+    from datetime import date, timedelta
+    cards = _load_cards()
+    for c in cards:
+        if c["id"] == int(card_id):
+            if str(result).lower() in ("pass", "correct", "good", "easy", "yes"):
+                c["level"] = min(c["level"] + 1, len(_INTERVALS) - 1)
+            else:
+                c["level"] = 0
+            days = _INTERVALS[c["level"]]
+            c["due"] = str(date.today() + timedelta(days=days))
+            _save_cards(cards)
+            return (f"Card {card_id}: {'advanced' if c['level'] else 'reset'} — "
+                    f"next review in {days} day{'s' if days != 1 else ''}.")
+    return f"No card with id {card_id}."
+
+
+def flashcard_answer(card_id):
+    """Reveal the back (answer) of a flashcard."""
+    for c in _load_cards():
+        if c["id"] == int(card_id):
+            return f"Answer to card {card_id}: {c['back']}"
+    return f"No card with id {card_id}."
+
+
 # --- learning: code runner, verified math, progress ------------------------------
 import sys as _sys
 
@@ -1014,6 +1156,12 @@ def daily_briefing(city=None):
     if todos:
         parts.append("Your todo list: " + "; ".join(todos[:6]) +
                      ("…" if len(todos) > 6 else ""))
+
+    due = flashcards_due()
+    if not due.startswith("No flashcards"):
+        n = due.split(" ")[0]
+        parts.append(f"📇 You have {n} flashcards due for review — say 'review my "
+                     f"flashcards' when ready.")
 
     try:
         from ddgs import DDGS
@@ -1327,6 +1475,47 @@ TOOLS = [
             "variable": {"type": "string", "description": "Variable name, default x"}},
             "required": ["expression"]}}},
     {"type": "function", "function": {
+        "name": "read_text_from_image",
+        "description": "OCR: extract the exact text from an image or screenshot file.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "Path to the image"}},
+            "required": ["path"]}}},
+    {"type": "function", "function": {
+        "name": "get_clipboard",
+        "description": ("Read the user's current clipboard. Use when they say "
+                        "'my clipboard', 'what I copied', 'this error' etc."),
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "system_status",
+        "description": "Battery, disk space, memory and CPU load of this computer.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "flashcard_add",
+        "description": ("Create a spaced-repetition flashcard. Tutors: call this for "
+                        "each concept the student answered wrongly or found hard."),
+        "parameters": {"type": "object", "properties": {
+            "front": {"type": "string", "description": "The question/prompt"},
+            "back": {"type": "string", "description": "The answer"},
+            "subject": {"type": "string"}}, "required": ["front", "back"]}}},
+    {"type": "function", "function": {
+        "name": "flashcards_due",
+        "description": "List flashcards due for review today.",
+        "parameters": {"type": "object", "properties": {
+            "subject": {"type": "string", "description": "Optional subject filter"}}}}},
+    {"type": "function", "function": {
+        "name": "flashcard_answer",
+        "description": "Reveal the correct answer of a flashcard by id.",
+        "parameters": {"type": "object", "properties": {
+            "card_id": {"type": "integer"}}, "required": ["card_id"]}}},
+    {"type": "function", "function": {
+        "name": "flashcard_grade",
+        "description": ("Record whether the student got a flashcard right ('pass') or "
+                        "wrong ('fail'); reschedules it by spaced repetition."),
+        "parameters": {"type": "object", "properties": {
+            "card_id": {"type": "integer"},
+            "result": {"type": "string", "enum": ["pass", "fail"]}},
+            "required": ["card_id", "result"]}}},
+    {"type": "function", "function": {
         "name": "save_progress",
         "description": ("Save the student's study progress (topics covered, weak "
                         "spots, what to do next) so the next lesson can resume. Call "
@@ -1410,4 +1599,19 @@ def dispatch(name, args, confirm=None):
     if name == "save_progress":
         return save_progress(args.get("subject", ""), args.get("covered", ""),
                              args.get("weak_spots", ""), args.get("next_topic", ""))
+    if name == "read_text_from_image":
+        return read_text_from_image(args.get("path", ""))
+    if name == "get_clipboard":
+        return get_clipboard()
+    if name == "system_status":
+        return system_status()
+    if name == "flashcard_add":
+        return flashcard_add(args.get("front", ""), args.get("back", ""),
+                             args.get("subject", "general"))
+    if name == "flashcards_due":
+        return flashcards_due(args.get("subject"))
+    if name == "flashcard_answer":
+        return flashcard_answer(args.get("card_id", 0))
+    if name == "flashcard_grade":
+        return flashcard_grade(args.get("card_id", 0), args.get("result", "fail"))
     return f"Unknown tool: {name}."

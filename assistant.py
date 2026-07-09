@@ -48,6 +48,30 @@ import time
 
 import numpy as np
 
+
+def _load_config():
+    """Load ~/.config/voice-assistant/config.toml into VA_* env vars.
+    Env vars set before launch still win. Must run before `import voice`/tools,
+    which read the environment at import time."""
+    import tomllib
+    path = os.path.expanduser("~/.config/voice-assistant/config.toml")
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+    except FileNotFoundError:
+        return
+    except Exception as exc:
+        print(f"⚠️  config.toml ignored ({exc})")
+        return
+    for key, value in data.items():
+        env = key if key.upper().startswith("VA_") else "VA_" + key.upper()
+        if isinstance(value, bool):
+            value = "1" if value else "0"
+        os.environ.setdefault(env.upper(), str(value))
+
+
+_load_config()
+
 import voice
 
 # --- terminal UI helpers ----------------------------------------------------
@@ -124,7 +148,12 @@ def agent_system_prompt():
         "look at the screen or image files, remember/forget facts about the user, manage "
         "named lists (shopping/todo/notes), give a daily_briefing (use it when the user "
         "says 'good morning' or asks about their day), answer questions about long "
-        "documents with ask_document, and show desktop notifications. "
+        "documents with ask_document, show desktop notifications, read the clipboard, "
+        "OCR text out of images (read_text_from_image), report battery/disk/memory "
+        "(system_status), run Python code, verify math with calculate, and manage "
+        "spaced-repetition flashcards (when the user asks to review flashcards: list "
+        "due cards, quiz one at a time, reveal with flashcard_answer, then "
+        "flashcard_grade pass or fail). "
         "When the user shares lasting personal info (name, preferences, projects), call "
         "remember_fact so you keep it for future sessions. "
         "You CAN speak Nepali: if the user asks for Nepali, reply in Devanagari script "
@@ -175,6 +204,16 @@ def activity_label(fn, args):
         "daily_briefing": "🌅 Preparing your briefing",
         "ask_document": f"📚 Studying: {a.get('path', '')}",
         "notify_desktop": f"🔔 Notifying: {a.get('title', '')}",
+        "run_python": "🐍 Running code",
+        "calculate": f"🧮 Computing: {a.get('expression', '')}",
+        "save_progress": f"🎓 Saving progress: {a.get('subject', '')}",
+        "read_text_from_image": f"👁️  Reading text from: {a.get('path', '')}",
+        "get_clipboard": "📋 Reading clipboard",
+        "system_status": "📊 Checking system",
+        "flashcard_add": f"📇 New card: {a.get('front', '')[:40]}",
+        "flashcards_due": "📇 Checking due cards",
+        "flashcard_answer": f"📇 Revealing card {a.get('card_id', '')}",
+        "flashcard_grade": f"📇 Grading card {a.get('card_id', '')}: {a.get('result', '')}",
     }.get(fn, f"🛠️  {fn}")
 
 
@@ -408,6 +447,13 @@ PRACTICE_MODES = {
         "the boss for leave, giving status updates. Play the other person in a "
         "realistic scene, one exchange at a time, and occasionally coach with a "
         "better phrasing in brackets. Begin now by proposing a scene and starting it."),
+    "translator": (
+        "You are a precise live interpreter between English and Nepali. For every "
+        "user message: if it is in Nepali (Devanagari or romanized Nepali), reply "
+        "with ONLY the English translation. If it is in English, reply with ONLY "
+        "the Nepali translation written in Devanagari script. No explanations, no "
+        "notes, no romanization — just the translation itself. Begin by saying, in "
+        "one short sentence, that translator mode is on."),
     "interview": (
         "You are a hiring manager conducting a realistic job interview. Ask ONE "
         "question at a time — mix of background, behavioral ('tell me about a time…') "
@@ -621,11 +667,13 @@ def push_prompt(current_model, practice=None):
                 print(f"  [{i + 1}] {model_label(m)}{mark}")
         try:
             choice = input(f"▶ [Enter] talk   [1-{len(models)}] model   [p] practice   "
-                           f"[q] quit: ").strip().lower()
+                           f"[d] dictate   [q] quit: ").strip().lower()
         except EOFError:
             return "quit"
     if choice == "":
         return "talk"
+    if choice == "d":
+        return "dictate"
     if choice in ("q", "quit", "exit"):
         return "quit"
     if choice == "p":
@@ -685,6 +733,45 @@ def load_whisper(name):
     if dev == "cpu":
         print("ℹ️  Whisper is on CPU (slower STT, but coexists with the LLM on GPU).")
     return model
+
+
+# --- conversation persistence ---------------------------------------------------
+CHATS_DIR = os.path.expanduser("~/.local/share/voice-assistant/chats")
+
+
+def save_chat(history):
+    """Persist a finished conversation (skips empty ones)."""
+    import datetime
+    import json
+    turns = [m for m in history if m["role"] in ("user", "assistant")]
+    if len(turns) < 2:
+        return None
+    os.makedirs(CHATS_DIR, exist_ok=True)
+    path = os.path.join(CHATS_DIR,
+                        f"chat-{datetime.datetime.now():%Y%m%d-%H%M%S}.json")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(history, f, ensure_ascii=False, indent=1)
+        return path
+    except Exception:
+        return None
+
+
+def load_last_chat():
+    """Return (history, path) of the most recent saved chat, or (None, None)."""
+    import json
+    try:
+        files = sorted(f for f in os.listdir(CHATS_DIR) if f.endswith(".json"))
+    except FileNotFoundError:
+        return None, None
+    if not files:
+        return None, None
+    path = os.path.join(CHATS_DIR, files[-1])
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f), path
+    except Exception:
+        return None, None
 
 
 class TextSpeaker:
@@ -757,13 +844,27 @@ def text_main(agent):
           "Or just type your message.\n")
 
     history = [{"role": "system", "content": sys_prompt}]
+    tools_mode = False        # /learn and /review need tools even without --agent
     while True:
         try:
             text = input("you> ").strip()
         except (EOFError, KeyboardInterrupt):
+            save_chat(history)
             print("\nGoodbye!")
             break
         if not text:
+            continue
+        if text.lower().strip() == "/resume":
+            old, path = load_last_chat()
+            if not old:
+                print("No saved conversations yet.")
+                continue
+            history = old
+            last = [m for m in old if m["role"] == "assistant"]
+            print(f"↩️  Resumed {os.path.basename(path)} "
+                  f"({len(old)} messages). Last reply:")
+            if last:
+                print(f"{GREEN}assistant>{RESET} {str(last[-1]['content'])[:300]}")
             continue
         if text.startswith("```"):
             # Multi-line paste: keep reading until a closing ``` line.
@@ -783,6 +884,10 @@ def text_main(agent):
         low = text.lower()
 
         if low in ("/quit", "/exit", "quit", "exit", "goodbye", "bye"):
+            saved = save_chat(history)
+            if saved:
+                print(f"💾 Conversation saved ({os.path.basename(saved)}) — "
+                      "/resume next time to continue.")
             print("Goodbye!")
             break
         if low in ("/help", "/h"):
@@ -799,11 +904,37 @@ def text_main(agent):
             for i, m in enumerate(available_models()):
                 print(f"  [{i + 1}] {model_label(m)}{'  ← current' if m == current_model else ''}")
             continue
+        if low.startswith("/review"):
+            import tools as T
+            due = T.flashcards_due()
+            if due.startswith("No flashcards"):
+                print("📇 " + due)
+                continue
+            if not supports_tools(current_model):
+                alt = pick_tool_model(available_models())
+                if alt:
+                    current_model = alt
+                    print(f"🔀 Using {model_label(alt)} for the review.")
+            tools_mode = True
+            history = [{"role": "system", "content":
+                        "You are running a flashcard review session. The due cards "
+                        "are listed below. For ONE card at a time: show its question "
+                        "and stop (wait for the user's answer). When they answer, "
+                        "call flashcard_answer to get the real answer, judge whether "
+                        "they were right, tell them, call flashcard_grade with pass "
+                        "or fail, then present the next card. After the last card "
+                        "give a short summary.\n\n" + due},
+                       {"role": "user", "content": "I'm ready, start the review."}]
+            print("📇 Flashcard review — answer each question. /learn off to stop.")
+            agent_respond(history, speaker, current_model, confirm_shell)
+            continue
+
         if low.startswith("/learn") or low.startswith("/quiz"):
             quiz = low.startswith("/quiz")
             args = text.split()[1:]
             subj = args[0].lower() if args else ""
             if subj in ("off", "stop"):
+                tools_mode = False
                 history = [{"role": "system", "content": sys_prompt}]
                 print("🎓 Learning mode off.")
                 continue
@@ -815,11 +946,12 @@ def text_main(agent):
             if best and best != current_model:
                 current_model = best
                 print(f"🔀 Using {model_label(best)} for this subject.")
+            tools_mode = supports_tools(current_model)   # tutor gets run_python etc.
             history = [{"role": "system", "content": tutor_prompt(subj, quiz)},
                        {"role": "user", "content": "Let's begin."}]
             print(f"🎓 {'Quiz' if quiz else 'Tutor'}: {subj} — progress is saved "
                   "automatically. /learn off to stop. Paste code with ``` blocks.")
-            if agent:
+            if tools_mode:
                 agent_respond(history, speaker, current_model, confirm_shell)
             else:
                 reply = respond_text(history, current_model)
@@ -875,7 +1007,7 @@ def text_main(agent):
 
         history.append({"role": "user", "content": text})
         try:
-            if agent:
+            if agent or tools_mode:
                 agent_respond(history, speaker, current_model, confirm_shell)
             else:
                 reply = respond_text(history, current_model)
@@ -883,10 +1015,61 @@ def text_main(agent):
         except Exception as exc:                       # never crash the conversation
             history.pop()
             print(f"⚠️  '{current_model}' failed: {exc}")
-            alt = pick_tool_model(available_models()) if agent else None
+            alt = pick_tool_model(available_models()) if (agent or tools_mode) else None
             if alt and alt != current_model:
                 current_model = alt
                 print(f"🔀 Switched to '{alt}' — please repeat your message.")
+
+
+def dictate(engine, speaker, transcribe_final, model, gain_guard):
+    """Voice dictation: speech is appended verbatim to a document; on finish the
+    LLM produces a cleaned-up version alongside the raw transcript."""
+    import datetime
+    import voice as _voice
+    default = f"dictation-{datetime.datetime.now():%Y%m%d-%H%M}.md"
+    try:
+        name = input(f"📄 File name (Enter = ~/Documents/{default}): ").strip()
+    except EOFError:
+        return
+    path = os.path.expanduser(name or f"~/Documents/{default}")
+    if not os.path.isabs(path):
+        path = os.path.expanduser(f"~/Documents/{path}")
+    print("🎙️  Dictating. Speak in chunks; press Enter to end each chunk. "
+          "Say 'stop dictation' to finish.\n")
+    chunks = []
+    while True:
+        audio = engine.record_push_to_talk(wait_for_start=False)
+        if audio is None or len(audio) < _voice.FRAME_SIZE:
+            continue
+        gain_guard.check(audio)
+        text, _segments = transcribe_final(audio, len(audio) // _voice.FRAME_SIZE)
+        if not text:
+            print("(heard nothing — keep going)")
+            continue
+        if "stop dictation" in text.lower():
+            break
+        chunks.append(text.strip())
+        print(f"➕ {text.strip()}\n")
+    if not chunks:
+        print("Nothing dictated.")
+        return
+    raw = "\n\n".join(chunks)
+    cleaned = raw
+    try:
+        import ollama
+        r = ollama.chat(model=model, messages=[{
+            "role": "user",
+            "content": "Clean up this dictated text: fix grammar, punctuation and "
+                       "obvious speech-recognition slips, keep the meaning and tone, "
+                       "output ONLY the cleaned text:\n\n" + raw}])
+        cleaned = "".join(strip_think(iter([r["message"]["content"]]))).strip() or raw
+    except Exception:
+        pass
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(cleaned + "\n\n---\nRaw transcript:\n\n" + raw + "\n")
+    print(f"💾 Saved to {path} ({len(chunks)} chunks, cleaned + raw).")
+    speaker.say_blocking("Dictation saved.")
 
 
 def agent_respond(history, speaker, model, confirm_shell, max_steps=6):
@@ -1027,13 +1210,13 @@ def main():
     gain_guard = voice.InputGain()
     print(f"🎤 Input: {engine.input_name}")
 
-    stt_context = {"prompt": None}     # biases Whisper toward likely vocabulary
+    stt_context = {"prompt": None, "lang": lang}   # per-mode Whisper hints
 
     def transcribe_final(audio, voiced):
         if live:
             return live.finalize(audio, voiced)
         print("Transcribing...")
-        result = model.transcribe(audio, fp16=fp16, language=lang,
+        result = model.transcribe(audio, fp16=fp16, language=stt_context["lang"],
                                   condition_on_previous_text=False,
                                   initial_prompt=stt_context["prompt"])
         return result["text"].strip(), result.get("segments", [])
@@ -1116,6 +1299,9 @@ def main():
                     speaker.say_blocking(f"Okay, now using {short}.")
                     print(f"🔀 Switched LLM to {current_model}\n")
                     continue
+                if action == "dictate":
+                    dictate(engine, speaker, transcribe_final, current_model, gain_guard)
+                    continue
                 if action.startswith("practice:"):
                     parts = action.split(":", 2)
                     sel = parts[1]
@@ -1123,11 +1309,14 @@ def main():
                     if sel == "off":
                         practice = None
                         stt_context["prompt"] = None
+                        stt_context["lang"] = lang
                         history = [{"role": "system", "content": sys_prompt}]
                         print("🎭 Practice mode off.\n")
                         continue
                     practice = sel
                     stt_context["prompt"] = PRACTICE_STT_BIAS.get(sel)
+                    # Translator must hear both languages → Whisper auto-detect.
+                    stt_context["lang"] = None if sel == "translator" else lang
                     history = [{"role": "system", "content": practice_prompt(sel, country)},
                                {"role": "user", "content": "Let's begin the practice."}]
                     label = f"{country} embassy" if country else sel.capitalize()
@@ -1161,6 +1350,7 @@ def main():
             if practice and "stop practice" in text.lower():
                 practice = None
                 stt_context["prompt"] = None
+                stt_context["lang"] = lang
                 history = [{"role": "system", "content": sys_prompt}]
                 speaker.say_blocking("Practice ended. Nice work!")
                 print("🎭 Practice mode off.\n")
@@ -1210,6 +1400,7 @@ def main():
     except KeyboardInterrupt:
         print("\nGoodbye!")
     finally:
+        save_chat(history)
         if live:
             live.close()
         engine.close()
