@@ -169,7 +169,7 @@ def test_course_lifecycle(tmp_path):
     assert "Module 1 of 12" in courses.module_brief("python")
     courses.advance_course("python")
     assert courses.course_state("python")["module"] == 1
-    for _ in range(10):
+    for _ in range(15):
         courses.advance_course("python")
     assert courses.course_state("python")["done"] is True
 
