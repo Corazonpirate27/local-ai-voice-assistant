@@ -73,7 +73,15 @@ def _load_config():
 
 _load_config()
 
-import voice
+voice = None                     # heavy (scipy/sounddevice); loaded on demand
+
+
+def _load_voice():
+    global voice
+    if voice is None:
+        import voice as _v
+        voice = _v
+    return voice
 
 # --- terminal UI helpers (Claude-Code-style) ----------------------------------
 _TTY = sys.stdout.isatty()
@@ -400,13 +408,20 @@ def _norm(s):
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
-def available_models():
-    """Names of all locally-installed Ollama models."""
+_MODELS_CACHE = {"at": 0.0, "names": []}
+
+
+def available_models(max_age=5.0):
+    """Names of all locally-installed Ollama models (cached briefly — the menu
+    renders every turn and each call is an HTTP round-trip)."""
     import ollama
+    now = time.monotonic()
+    if now - _MODELS_CACHE["at"] < max_age:
+        return list(_MODELS_CACHE["names"])
     try:
         data = ollama.list()
     except Exception:
-        return []
+        return list(_MODELS_CACHE["names"])
     models = data.get("models", []) if isinstance(data, dict) else getattr(data, "models", [])
     names = []
     for m in models:
@@ -415,7 +430,8 @@ def available_models():
         # Embedding-only models can't chat; keep them out of the chat menu.
         if name and not any(t in name.lower() for t in ("embed", "bge-", "minilm")):
             names.append(name)
-    return names
+    _MODELS_CACHE["at"], _MODELS_CACHE["names"] = time.monotonic(), names
+    return list(names)
 
 
 # What each model family is best at — shown in the model menus.
@@ -856,6 +872,18 @@ def text_banner(model, agent):
 CHATS_DIR = os.path.expanduser("~/.local/share/voice-assistant/chats")
 
 
+MAX_HISTORY = int(os.environ.get("VA_MAX_HISTORY", "40"))
+
+
+def trim_history(history):
+    """Keep the system prompt plus the most recent turns. Unbounded history makes
+    every Ollama call slower (the whole context is re-read each turn) and can
+    overflow the model's window in long sessions."""
+    if len(history) > MAX_HISTORY:
+        del history[1:len(history) - (MAX_HISTORY - 8)]
+    return history
+
+
 def save_chat(history):
     """Persist a finished conversation (skips empty ones)."""
     import datetime
@@ -1180,7 +1208,7 @@ def text_main(agent):
                 print(f"No model matches '{cmd[1]}'. Try /models.")
                 continue
 
-        history.append({"role": "user", "content": text})
+        trim_history(history).append({"role": "user", "content": text})
         try:
             if agent or active_toolset:
                 agent_respond(history, speaker, current_model, confirm_shell,
@@ -1511,6 +1539,7 @@ def main():
     if "--text" in sys.argv or os.environ.get("VA_TEXT", "0") == "1":
         text_main(agent)
         return
+    _load_voice()                       # voice mode from here on
     use_aec = "--aec" in sys.argv or os.environ.get("VA_AEC", "0") == "1"
     # fp16 is off by default: GTX 16-series GPUs produce NaN logits in half precision.
     # The model still runs on GPU in fp32. Set VA_FP16=1 on GPUs that support it.
@@ -1734,7 +1763,7 @@ def main():
                     continue
                 # loose keyword that didn't resolve → treat as normal conversation
 
-            history.append({"role": "user", "content": text})
+            trim_history(history).append({"role": "user", "content": text})
             try:
                 if agent and not practice:
                     agent_respond(history, speaker, current_model, confirm_shell)

@@ -7,9 +7,13 @@ can be spoken). Everything degrades gracefully if a system utility is missing.
 """
 
 import glob
+import json
 import os
 import shutil
 import subprocess
+import tempfile
+import threading
+import time
 
 DEVNULL = subprocess.DEVNULL
 
@@ -609,8 +613,6 @@ def get_time(timezone_name="local", convert_time_str=None, from_timezone=None):
 
 
 # --- reminders & timers -------------------------------------------------------
-import threading as _threading
-import time as _time
 
 _reminders = []            # [{"at": epoch, "text": str, "timer": Timer}]
 _alert_cb = [None]         # set by the assistant: called with the reminder text
@@ -627,7 +629,7 @@ def set_reminder(minutes=None, text="", seconds=None):
     if total <= 0:
         return "Please give a duration, like 10 minutes."
     text = text.strip() or "your reminder"
-    fire_at = _time.time() + total
+    fire_at = time.time() + total
 
     def fire():
         _reminders[:] = [r for r in _reminders if r["at"] != fire_at]
@@ -642,7 +644,7 @@ def set_reminder(minutes=None, text="", seconds=None):
         else:
             print(f"\n🔔 {msg}")
 
-    t = _threading.Timer(total, fire)
+    t = threading.Timer(total, fire)
     t.daemon = True
     t.start()
     _reminders.append({"at": fire_at, "text": text, "timer": t})
@@ -656,7 +658,7 @@ def set_reminder(minutes=None, text="", seconds=None):
 def list_reminders():
     if not _reminders:
         return "There are no active reminders."
-    now = _time.time()
+    now = time.time()
     lines = []
     for r in sorted(_reminders, key=lambda r: r["at"]):
         left = max(0, int(r["at"] - now))
@@ -730,7 +732,6 @@ MEMORY_FILE = os.path.expanduser(os.environ.get("VA_MEMORY_FILE", "~/.voice_assi
 
 
 def _load_memory():
-    import json
     try:
         with open(MEMORY_FILE, encoding="utf-8") as f:
             data = json.load(f)
@@ -740,7 +741,6 @@ def _load_memory():
 
 
 def _save_memory(items):
-    import json
     try:
         with open(MEMORY_FILE, "w", encoding="utf-8") as f:
             json.dump(items, f, ensure_ascii=False, indent=1)
@@ -1065,7 +1065,6 @@ _INTERVALS = [1, 3, 7, 16, 35, 90]      # days per consecutive success
 
 
 def _load_cards():
-    import json
     try:
         with open(CARDS_FILE, encoding="utf-8") as f:
             d = json.load(f)
@@ -1075,7 +1074,6 @@ def _load_cards():
 
 
 def _save_cards(cards):
-    import json
     try:
         with open(CARDS_FILE, "w", encoding="utf-8") as f:
             json.dump(cards, f, ensure_ascii=False, indent=1)
@@ -1149,7 +1147,7 @@ def run_python(code, timeout=15):
         r = subprocess.run(
             [_sys.executable, "-I", "-c", code],   # -I: isolated, no site/user paths
             capture_output=True, text=True, timeout=timeout,
-            cwd=tempfile.gettempdir() if (tempfile := __import__("tempfile")) else None)
+            cwd=tempfile.gettempdir())
         out = (r.stdout or "").strip()
         err = (r.stderr or "").strip()
         result = ""
@@ -1212,7 +1210,6 @@ LEARNING_FILE = os.path.expanduser(
 
 
 def _load_learning():
-    import json
     try:
         with open(LEARNING_FILE, encoding="utf-8") as f:
             d = json.load(f)
@@ -1223,7 +1220,6 @@ def _load_learning():
 
 def save_progress(subject, covered="", weak_spots="", next_topic=""):
     """Record where a study session ended so the next one can resume."""
-    import json
     from datetime import date
     subject = (subject or "general").strip().lower()
     data = _load_learning()
@@ -1278,7 +1274,6 @@ LISTS_FILE = os.path.expanduser(os.environ.get("VA_LISTS_FILE", "~/.voice_assist
 
 
 def _load_lists():
-    import json
     try:
         with open(LISTS_FILE, encoding="utf-8") as f:
             data = json.load(f)
@@ -1288,7 +1283,6 @@ def _load_lists():
 
 
 def _save_lists(data):
-    import json
     try:
         with open(LISTS_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
@@ -1425,7 +1419,7 @@ def _portal_screenshot(path, timeout_s=20):
         ["gdbus", "monitor", "--session", "--dest", "org.freedesktop.portal.Desktop"],
         stdout=subprocess.PIPE, text=True)
     try:
-        _time.sleep(0.3)
+        time.sleep(0.3)
         subprocess.run(
             ["gdbus", "call", "--session",
              "--dest", "org.freedesktop.portal.Desktop",
@@ -1434,8 +1428,8 @@ def _portal_screenshot(path, timeout_s=20):
              "", "{'handle_token': <'%s'>, 'interactive': <false>}" % token],
             capture_output=True, text=True, timeout=10)
         import select
-        deadline = _time.time() + timeout_s
-        while _time.time() < deadline:
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
             ready, _, _ = select.select([mon.stdout], [], [], 0.5)
             if not ready:
                 continue
@@ -1481,8 +1475,7 @@ def _describe_with_vision(image_path, question):
 
 def look_at_screen(question=""):
     """Screenshot the screen and describe it / answer a question about it."""
-    import tempfile as _tempfile
-    path = os.path.join(_tempfile.gettempdir(), "va_screen.png")
+    path = os.path.join(tempfile.gettempdir(), "va_screen.png")
     if not _take_screenshot(path):
         return ("I couldn't capture the screen. On GNOME Wayland a permission "
                 "dialog may need to be accepted, or install gnome-screenshot.")
@@ -1847,106 +1840,72 @@ REVIEW_TOOLS = subset({"flashcards_due", "flashcard_answer", "flashcard_grade",
                        "flashcard_add", "calculate"})
 
 
+# Table-driven dispatch: each entry maps tool name -> callable(args, confirm).
+_DISPATCH = {
+    "open_app": lambda a, c: open_app(a.get("name", "")),
+    "set_volume": lambda a, c: set_volume(a.get("action", "set"), a.get("level")),
+    "set_brightness": lambda a, c: set_brightness(a.get("percent", 50)),
+    "run_shell": lambda a, c: (
+        run_shell(a.get("command", ""))
+        if c is None or c(f"run the shell command: {a.get('command', '')}")
+        else "The user declined to run that command."),
+    "find_documents": lambda a, c: find_documents(a.get("query", ""), a.get("folder")),
+    "search_documents": lambda a, c: search_documents(a.get("text", ""), a.get("folder")),
+    "read_document": lambda a, c: read_document(a.get("path", "")),
+    "ask_document": lambda a, c: ask_document(a.get("path", ""), a.get("question", "")),
+    "web_search": lambda a, c: web_search(a.get("query", "")),
+    "fetch_webpage": lambda a, c: fetch_webpage(a.get("url", "")),
+    "youtube_transcript": lambda a, c: youtube_transcript(a.get("url", "")),
+    "get_weather": lambda a, c: get_weather(a.get("city", "")),
+    "get_time": lambda a, c: get_time(a.get("timezone_name", "local"),
+                                      a.get("convert_time_str"), a.get("from_timezone")),
+    "set_reminder": lambda a, c: set_reminder(a.get("minutes"), a.get("text", ""),
+                                              a.get("seconds")),
+    "list_reminders": lambda a, c: list_reminders(),
+    "cancel_reminders": lambda a, c: cancel_reminders(),
+    "media_control": lambda a, c: media_control(a.get("action", ""), a.get("player")),
+    "remember_fact": lambda a, c: remember_fact(a.get("fact", "")),
+    "forget_fact": lambda a, c: forget_fact(a.get("matching", "")),
+    "look_at_screen": lambda a, c: look_at_screen(a.get("question", "")),
+    "describe_image": lambda a, c: describe_image(a.get("path", ""), a.get("question", "")),
+    "read_text_from_image": lambda a, c: read_text_from_image(a.get("path", "")),
+    "get_clipboard": lambda a, c: get_clipboard(),
+    "system_status": lambda a, c: system_status(),
+    "list_add": lambda a, c: list_add(a.get("list_name", "notes"), a.get("item", "")),
+    "list_show": lambda a, c: list_show(a.get("list_name")),
+    "list_remove": lambda a, c: list_remove(a.get("list_name", "notes"), a.get("item", "")),
+    "list_clear": lambda a, c: list_clear(a.get("list_name", "")),
+    "daily_briefing": lambda a, c: daily_briefing(a.get("city")),
+    "notify_desktop": lambda a, c: ("Notification shown."
+                                    if notify_desktop(a.get("title", ""), a.get("body", ""))
+                                    else "Desktop notifications aren't available."),
+    "run_python": lambda a, c: run_python(a.get("code", "")),
+    "calculate": lambda a, c: calculate(a.get("expression", ""),
+                                        a.get("operation", "evaluate"),
+                                        a.get("variable", "x") or "x"),
+    "save_progress": lambda a, c: save_progress(a.get("subject", ""), a.get("covered", ""),
+                                                a.get("weak_spots", ""), a.get("next_topic", "")),
+    "flashcard_add": lambda a, c: flashcard_add(a.get("front", ""), a.get("back", ""),
+                                                a.get("subject", "general")),
+    "flashcards_due": lambda a, c: flashcards_due(a.get("subject")),
+    "flashcard_answer": lambda a, c: flashcard_answer(a.get("card_id", 0)),
+    "flashcard_grade": lambda a, c: flashcard_grade(a.get("card_id", 0),
+                                                    a.get("result", "fail")),
+    "create_project_file": lambda a, c: create_project_file(a.get("path", ""),
+                                                            a.get("content", "")),
+    "review_project": lambda a, c: review_project(a.get("folder", "")),
+    "run_project": lambda a, c: run_project(a.get("folder", ""), a.get("command", "")),
+    "write_file": lambda a, c: write_file(a.get("path", ""), a.get("content", ""), confirm=c),
+    "delete_file": lambda a, c: delete_file(a.get("path", ""), confirm=c),
+    "move_file": lambda a, c: move_file(a.get("src", ""), a.get("dst", ""),
+                                        bool(a.get("copy")), confirm=c),
+    "list_folder": lambda a, c: list_folder(a.get("path", "~")),
+}
+
+
 def dispatch(name, args, confirm=None):
-    """Execute a tool by name. `confirm(command)->bool` gates run_shell."""
-    args = args or {}
-    if name == "open_app":
-        return open_app(args.get("name", ""))
-    if name == "set_volume":
-        return set_volume(args.get("action", "set"), args.get("level"))
-    if name == "set_brightness":
-        return set_brightness(args.get("percent", 50))
-    if name == "run_shell":
-        command = args.get("command", "")
-        if confirm is not None and not confirm(f"run the shell command: {command}"):
-            return "The user declined to run that command."
-        return run_shell(command)
-    if name == "find_documents":
-        return find_documents(args.get("query", ""), args.get("folder"))
-    if name == "search_documents":
-        return search_documents(args.get("text", ""), args.get("folder"))
-    if name == "read_document":
-        return read_document(args.get("path", ""))
-    if name == "web_search":
-        return web_search(args.get("query", ""))
-    if name == "fetch_webpage":
-        return fetch_webpage(args.get("url", ""))
-    if name == "get_weather":
-        return get_weather(args.get("city", ""))
-    if name == "get_time":
-        return get_time(args.get("timezone_name", "local"),
-                        args.get("convert_time_str"), args.get("from_timezone"))
-    if name == "set_reminder":
-        return set_reminder(args.get("minutes"), args.get("text", ""),
-                            args.get("seconds"))
-    if name == "list_reminders":
-        return list_reminders()
-    if name == "cancel_reminders":
-        return cancel_reminders()
-    if name == "media_control":
-        return media_control(args.get("action", ""), args.get("player"))
-    if name == "remember_fact":
-        return remember_fact(args.get("fact", ""))
-    if name == "forget_fact":
-        return forget_fact(args.get("matching", ""))
-    if name == "look_at_screen":
-        return look_at_screen(args.get("question", ""))
-    if name == "describe_image":
-        return describe_image(args.get("path", ""), args.get("question", ""))
-    if name == "list_add":
-        return list_add(args.get("list_name", "notes"), args.get("item", ""))
-    if name == "list_show":
-        return list_show(args.get("list_name"))
-    if name == "list_remove":
-        return list_remove(args.get("list_name", "notes"), args.get("item", ""))
-    if name == "list_clear":
-        return list_clear(args.get("list_name", ""))
-    if name == "daily_briefing":
-        return daily_briefing(args.get("city"))
-    if name == "ask_document":
-        return ask_document(args.get("path", ""), args.get("question", ""))
-    if name == "notify_desktop":
-        return ("Notification shown." if notify_desktop(args.get("title", ""),
-                                                        args.get("body", ""))
-                else "Desktop notifications aren't available.")
-    if name == "run_python":
-        return run_python(args.get("code", ""))
-    if name == "calculate":
-        return calculate(args.get("expression", ""), args.get("operation", "evaluate"),
-                         args.get("variable", "x") or "x")
-    if name == "save_progress":
-        return save_progress(args.get("subject", ""), args.get("covered", ""),
-                             args.get("weak_spots", ""), args.get("next_topic", ""))
-    if name == "write_file":
-        return write_file(args.get("path", ""), args.get("content", ""), confirm=confirm)
-    if name == "delete_file":
-        return delete_file(args.get("path", ""), confirm=confirm)
-    if name == "move_file":
-        return move_file(args.get("src", ""), args.get("dst", ""),
-                         bool(args.get("copy")), confirm=confirm)
-    if name == "list_folder":
-        return list_folder(args.get("path", "~"))
-    if name == "youtube_transcript":
-        return youtube_transcript(args.get("url", ""))
-    if name == "create_project_file":
-        return create_project_file(args.get("path", ""), args.get("content", ""))
-    if name == "review_project":
-        return review_project(args.get("folder", ""))
-    if name == "run_project":
-        return run_project(args.get("folder", ""), args.get("command", ""))
-    if name == "read_text_from_image":
-        return read_text_from_image(args.get("path", ""))
-    if name == "get_clipboard":
-        return get_clipboard()
-    if name == "system_status":
-        return system_status()
-    if name == "flashcard_add":
-        return flashcard_add(args.get("front", ""), args.get("back", ""),
-                             args.get("subject", "general"))
-    if name == "flashcards_due":
-        return flashcards_due(args.get("subject"))
-    if name == "flashcard_answer":
-        return flashcard_answer(args.get("card_id", 0))
-    if name == "flashcard_grade":
-        return flashcard_grade(args.get("card_id", 0), args.get("result", "fail"))
-    return f"Unknown tool: {name}."
+    """Execute a tool by name. `confirm(action)->bool` gates destructive steps."""
+    fn = _DISPATCH.get(name)
+    if fn is None:
+        return f"Unknown tool: {name}."
+    return fn(args or {}, confirm)
