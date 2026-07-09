@@ -145,6 +145,26 @@ type `/resume` to continue the most recent one. Voice sessions save too.
 ./venv/bin/python -m pytest tests/ -q     # 21 tests, ~2s, no audio/network needed
 ```
 
+## Study mode 📚 — structured courses with projects (`/course`)
+
+Full CS50-style courses in eight domains, each 7–8 modules with a hands-on
+project per module and a capstone:
+
+```
+/course list             # python · cs · math · physics · ai · cybersec · software-eng · webdev
+/course start python     # enroll and begin module 1
+/course                  # continue where you left off (progress is saved)
+/course syllabus         # see your position in the course
+/course done             # mark the current module's project complete → next module
+```
+
+Each module runs like a real course: **teach** (one concept at a time, checked)
+→ **problem set** (graded, code actually run) → **project** (Claude-Code style:
+the instructor scaffolds a spec + starter files in `~/StudyProjects/<course>/`,
+*you* write the code in your editor, then it reviews your files like a senior
+engineer, runs them, and iterates with you until the spec is met). Wrong answers
+become flashcards automatically; progress persists between sessions.
+
 ## Learning mode 🎓 (`/learn`, `/quiz`)
 
 A personal tutor with real teaching mechanics, in text mode (`--text --agent`):

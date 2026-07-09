@@ -205,6 +205,9 @@ def activity_label(fn, args):
         "ask_document": f"📚 Studying: {a.get('path', '')}",
         "notify_desktop": f"🔔 Notifying: {a.get('title', '')}",
         "run_python": "🐍 Running code",
+        "create_project_file": f"📁 Scaffolding: {a.get('path', '')}",
+        "review_project": f"🔍 Reviewing project: {a.get('folder', '') or '(list)'}",
+        "run_project": f"▶️  Running in {a.get('folder', '')}: {a.get('command', '')}",
         "calculate": f"🧮 Computing: {a.get('expression', '')}",
         "save_progress": f"🎓 Saving progress: {a.get('subject', '')}",
         "read_text_from_image": f"👁️  Reading text from: {a.get('path', '')}",
@@ -520,6 +523,33 @@ def tutor_prompt(subject_key, quiz=False):
         "to be ending) call save_progress with subject, covered topics, weak spots, "
         "and the next topic. Keep responses focused — no walls of text."
         + progress_block)
+
+
+def course_tutor_prompt(course_key):
+    """System prompt for a structured course session (CS50-style, project-based)."""
+    import courses
+    import tools as T
+    brief = courses.module_brief(course_key)
+    progress = T.learning_summary(course_key)
+    progress_block = (f"\nSaved study notes:\n{progress}\n" if progress else "")
+    return (
+        "You are a world-class course instructor, teaching in the spirit of CS50: "
+        "rigorous but warm, building intuition before formalism, always hands-on.\n"
+        + brief + progress_block +
+        "\nRun the module as: (1) teach the topics ONE concept at a time with a "
+        "concrete example each, checking understanding with a short question before "
+        "moving on; (2) then a problem set of 3-5 exercises, graded honestly — use "
+        "run_python to actually run code answers and calculate to verify math; "
+        "(3) then the module PROJECT: create the folder under ~/StudyProjects/"
+        f"{course_key}/ with create_project_file (write a PROJECT.md spec with "
+        "requirements first, plus any starter files), let the STUDENT write the "
+        "code themselves in their editor, then review their work with "
+        "review_project and run it with run_project — give specific, honest code "
+        "review like a senior engineer, and iterate until it meets the spec. "
+        "Create flashcards (flashcard_add) for anything they get wrong. Call "
+        "save_progress at checkpoints. When the student has completed the project "
+        "to spec, tell them to type /course done to unlock the next module. "
+        "Keep every message focused — no walls of text.")
 
 
 # Vocabulary hints fed to Whisper during practice so names/terms transcribe better.
@@ -891,10 +921,11 @@ def text_main(agent):
             print("Goodbye!")
             break
         if low in ("/help", "/h"):
-            print("Type a message to chat. /models list · /model <name|number> switch "
-                  "· /learn python|math|cs|physics|cybersec|ai tutor mode · /quiz "
-                  "<subject> quizzes · /practice exam|embassy|work|interview role-play "
-                  "· ``` starts a code paste block · /quit to exit.")
+            print("Type a message to chat. /course — structured courses with projects "
+                  "(/course start python) · /learn <subject> free-form tutor · /quiz "
+                  "<subject> · /review flashcards · /practice exam|embassy|work|"
+                  "interview|translator · /models · /model <n> · /resume last chat "
+                  "· ``` code paste block · /quit.")
             continue
         if "stop practice" in low:
             history = [{"role": "system", "content": sys_prompt}]
@@ -904,6 +935,63 @@ def text_main(agent):
             for i, m in enumerate(available_models()):
                 print(f"  [{i + 1}] {model_label(m)}{'  ← current' if m == current_model else ''}")
             continue
+        if low.startswith("/course"):
+            import courses
+            args = text.split()[1:]
+            sub = args[0].lower() if args else ""
+            if sub in ("", "list") and not courses.course_state(sub or "x"):
+                if sub == "" and any(courses.course_state(k) and not courses.course_state(k).get("done")
+                                     for k in courses.CURRICULA):
+                    # continue the (first) active course
+                    sub = next(k for k in courses.CURRICULA
+                               if courses.course_state(k) and not courses.course_state(k).get("done"))
+                else:
+                    print("📚 Courses:\n" + courses.list_courses())
+                    print("\nStart one with: /course start python   "
+                          "(or cs, math, physics, ai, cybersec, software-eng, webdev)")
+                    continue
+            if sub == "start":
+                key = args[1].lower() if len(args) > 1 else ""
+                if not courses.start_course(key):
+                    print("Unknown course. " + ", ".join(courses.CURRICULA))
+                    continue
+                sub = key
+            if sub == "done":
+                active = [k for k in courses.CURRICULA
+                          if courses.course_state(k) and not courses.course_state(k).get("done")]
+                if not active:
+                    print("No active course.")
+                    continue
+                st = courses.advance_course(active[0])
+                if st.get("done"):
+                    print(f"🎉 Course '{active[0]}' completed! /course list to pick another.")
+                    continue
+                print(f"✅ Module complete — moving to module {st['module'] + 1}.")
+                sub = active[0]
+            if sub == "syllabus":
+                active = [k for k in courses.CURRICULA if courses.course_state(k)]
+                for k in active or []:
+                    print(courses.syllabus(k))
+                if not active:
+                    print("No courses started yet. /course list")
+                continue
+            if sub not in courses.CURRICULA:
+                print("Unknown course command. Use /course, /course start <name>, "
+                      "/course done, /course syllabus, /course list")
+                continue
+            courses.start_course(sub)
+            if not supports_tools(current_model):
+                alt = pick_tool_model(available_models())
+                if alt:
+                    current_model = alt
+                    print(f"🔀 Using {model_label(alt)} for the course.")
+            tools_mode = True
+            print("📚 " + courses.syllabus(sub) + "\n")
+            history = [{"role": "system", "content": course_tutor_prompt(sub)},
+                       {"role": "user", "content": "I'm ready — let's continue the course."}]
+            agent_respond(history, speaker, current_model, confirm_shell)
+            continue
+
         if low.startswith("/review"):
             import tools as T
             due = T.flashcards_due()

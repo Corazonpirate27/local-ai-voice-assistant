@@ -158,3 +158,25 @@ def test_norm_list_name():
 def test_app_aliases_resolve_missing_app_honestly():
     argv, label = T._find_app_launch("definitely_not_installed_xyz")
     assert argv is None
+
+
+# --- courses --------------------------------------------------------------------------
+def test_course_lifecycle(tmp_path):
+    import courses
+    courses.COURSES_FILE = str(tmp_path / "courses.json")
+    assert len(courses.CURRICULA) == 8
+    assert courses.start_course("python")["module"] == 0
+    assert "Module 1 of 8" in courses.module_brief("python")
+    courses.advance_course("python")
+    assert courses.course_state("python")["module"] == 1
+    for _ in range(10):
+        courses.advance_course("python")
+    assert courses.course_state("python")["done"] is True
+
+
+def test_project_tools_sandboxed(tmp_path, monkeypatch):
+    monkeypatch.setattr(T, "PROJECTS_ROOT", str(tmp_path))
+    assert "Refused" in T.create_project_file("../evil.py", "x")
+    assert "Wrote" in T.create_project_file("p/main.py", "print(1)")
+    assert "Output:\n1" in T.run_project("p", "python main.py")
+    assert "print(1)" in T.review_project("p")

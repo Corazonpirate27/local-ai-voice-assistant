@@ -758,6 +758,92 @@ def ask_document(path, question, top_k=4):
             + "\n\nAnswer the user's question using these passages.")
 
 
+# --- study projects (Claude-Code-style: scaffold, review, run) --------------------
+PROJECTS_ROOT = os.path.realpath(os.path.expanduser(
+    os.environ.get("VA_PROJECTS_ROOT", "~/StudyProjects")))
+
+
+def _project_path(rel):
+    """Resolve a path inside PROJECTS_ROOT; None if it escapes."""
+    p = os.path.realpath(os.path.join(PROJECTS_ROOT, os.path.expanduser(rel or "")))
+    if os.path.commonpath([p, PROJECTS_ROOT]) != PROJECTS_ROOT:
+        return None
+    return p
+
+
+def create_project_file(path, content):
+    """Create/overwrite a file inside the study-projects folder (~/StudyProjects).
+    Used by the tutor to scaffold starter code, specs and READMEs."""
+    p = _project_path(path)
+    if p is None:
+        return f"Refused: files can only be created under {PROJECTS_ROOT}."
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(content or "")
+        rel = os.path.relpath(p, PROJECTS_ROOT)
+        return f"Wrote {rel} ({len(content or '')} chars)."
+    except Exception as exc:
+        return f"Couldn't write the file: {exc}"
+
+
+def review_project(folder):
+    """Read every code/text file in a study-project folder so the tutor can
+    review the student's work (size-capped)."""
+    p = _project_path(folder)
+    if p is None:
+        return f"Refused: only folders under {PROJECTS_ROOT} can be reviewed."
+    if not os.path.isdir(p):
+        return f"No project folder at {folder}. Existing projects:\n" + \
+            "\n".join(f"- {d}" for d in sorted(os.listdir(PROJECTS_ROOT))
+                      if os.path.isdir(os.path.join(PROJECTS_ROOT, d))) \
+            if os.path.isdir(PROJECTS_ROOT) else "No projects yet."
+    exts = {".py", ".md", ".txt", ".html", ".css", ".js", ".json", ".sql", ".sh", ".c"}
+    out, total = [], 0
+    for dp, dns, fns in os.walk(p):
+        dns[:] = [d for d in dns if not d.startswith(".") and d != "__pycache__"]
+        for fn in sorted(fns):
+            if os.path.splitext(fn)[1].lower() not in exts:
+                continue
+            fp = os.path.join(dp, fn)
+            try:
+                with open(fp, encoding="utf-8", errors="ignore") as f:
+                    content = f.read()[:4000]
+            except OSError:
+                continue
+            total += len(content)
+            out.append(f"--- {os.path.relpath(fp, p)} ---\n{content}")
+            if total > 16000:
+                out.append("…(project truncated for review)")
+                break
+        if total > 16000:
+            break
+    if not out:
+        return f"The project folder {folder} has no readable code files yet."
+    return f"Project files in {folder}:\n\n" + "\n\n".join(out)
+
+
+def run_project(folder, command):
+    """Run a command (e.g. 'python main.py') inside a study-project folder."""
+    p = _project_path(folder)
+    if p is None or not os.path.isdir(p):
+        return "That project folder doesn't exist under ~/StudyProjects."
+    if not command or not command.strip():
+        return "No command given."
+    try:
+        r = subprocess.run(["bash", "-c", command], cwd=p, capture_output=True,
+                           text=True, timeout=30)
+        out = (r.stdout or "").strip()[:3000]
+        err = (r.stderr or "").strip()[:1500]
+        res = (f"Output:\n{out}" if out else "") + (f"\nErrors:\n{err}" if err else "")
+        return res or ("Ran with no output." if r.returncode == 0
+                       else f"Exited with code {r.returncode}.")
+    except subprocess.TimeoutExpired:
+        return "The command timed out after 30 seconds."
+    except Exception as exc:
+        return f"Couldn't run it: {exc}"
+
+
 # --- OCR, clipboard, system status ------------------------------------------------
 def read_text_from_image(path):
     """Extract the text in an image (screenshot, photo of a page). Uses tesseract
@@ -1475,6 +1561,29 @@ TOOLS = [
             "variable": {"type": "string", "description": "Variable name, default x"}},
             "required": ["expression"]}}},
     {"type": "function", "function": {
+        "name": "create_project_file",
+        "description": ("Create or overwrite a file inside the student's study "
+                        "projects folder (~/StudyProjects). Use to scaffold starter "
+                        "code, project specs (PROJECT.md) and READMEs."),
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string",
+                     "description": "Relative path, e.g. 'python/todo-app/main.py'"},
+            "content": {"type": "string"}}, "required": ["path", "content"]}}},
+    {"type": "function", "function": {
+        "name": "review_project",
+        "description": ("Read all code files in a study-project folder to review the "
+                        "student's work. Pass '' to list existing projects."),
+        "parameters": {"type": "object", "properties": {
+            "folder": {"type": "string",
+                       "description": "Relative folder, e.g. 'python/todo-app'"}},
+            "required": ["folder"]}}},
+    {"type": "function", "function": {
+        "name": "run_project",
+        "description": "Run a command (e.g. 'python main.py') inside a study-project folder.",
+        "parameters": {"type": "object", "properties": {
+            "folder": {"type": "string"},
+            "command": {"type": "string"}}, "required": ["folder", "command"]}}},
+    {"type": "function", "function": {
         "name": "read_text_from_image",
         "description": "OCR: extract the exact text from an image or screenshot file.",
         "parameters": {"type": "object", "properties": {
@@ -1599,6 +1708,12 @@ def dispatch(name, args, confirm=None):
     if name == "save_progress":
         return save_progress(args.get("subject", ""), args.get("covered", ""),
                              args.get("weak_spots", ""), args.get("next_topic", ""))
+    if name == "create_project_file":
+        return create_project_file(args.get("path", ""), args.get("content", ""))
+    if name == "review_project":
+        return review_project(args.get("folder", ""))
+    if name == "run_project":
+        return run_project(args.get("folder", ""), args.get("command", ""))
     if name == "read_text_from_image":
         return read_text_from_image(args.get("path", ""))
     if name == "get_clipboard":
