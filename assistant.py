@@ -171,7 +171,10 @@ def agent_system_prompt():
         f"Today's real date is {today}; treat it as the present. NEVER claim that past or "
         "current events are in the future or that something 'hasn't happened yet' based on "
         "your training cut-off — if unsure about anything current, use web_search. "
-        "Tools available: open apps, set volume and brightness, run shell commands, search "
+        "Tools available: full file management in the home folder (write_file, "
+        "move_file, delete_file, list_folder — overwrites and deletions always ask "
+        "the user first; key/credential folders are off-limits), "
+        "open apps, set volume and brightness, run shell commands, search "
         "the web, find/search/read the user's local documents, get weather, get exact "
         "times in any timezone (ALWAYS use get_time for time/timezone questions — never "
         "compute offsets yourself), set/list/cancel reminders, control music playback, "
@@ -242,6 +245,10 @@ def activity_label(fn, args):
         "save_progress": f"🎓 Saving progress: {a.get('subject', '')}",
         "read_text_from_image": f"👁️  Reading text from: {a.get('path', '')}",
         "get_clipboard": "📋 Reading clipboard",
+        "write_file": f"✏️  Writing: {a.get('path', '')}",
+        "delete_file": f"🗑️  Deleting: {a.get('path', '')}",
+        "move_file": f"📦 {'Copying' if a.get('copy') else 'Moving'}: {a.get('src', '')} → {a.get('dst', '')}",
+        "list_folder": f"📂 Listing: {a.get('path', '')}",
         "system_status": "📊 Checking system",
         "flashcard_add": f"📇 New card: {a.get('front', '')[:40]}",
         "flashcards_due": "📇 Checking due cards",
@@ -707,12 +714,15 @@ def push_prompt(current_model, practice=None):
                 mark = " ✓" if m == current_model else ""
                 print(f"  [{i + 1}] {model_label(m)}{mark}")
         try:
-            choice = input(f"▶ [Enter] talk   [1-{len(models)}] model   [p] practice   "
-                           f"[d] dictate   [n] lecture notes   [q] quit: ").strip().lower()
+            choice = input(f"▶ [Enter] talk   [t] type   [1-{len(models)}] model   "
+                           f"[p] practice   [d] dictate   [n] lecture notes   "
+                           f"[q] quit: ").strip().lower()
         except EOFError:
             return "quit"
     if choice == "":
         return "talk"
+    if choice == "t":
+        return "type"
     if choice == "d":
         return "dictate"
     if choice == "n":
@@ -936,10 +946,10 @@ def text_main(agent):
         import tools as T
         T.set_alert_callback(lambda msg: print(f"\n🔔 {msg}"))
 
-    def confirm_shell(cmd):
-        print(f"\n⚠️  Run this shell command?\n    {cmd}")
+    def confirm_shell(action):
+        print(f"\n⚠️  The assistant wants to: {action}")
         try:
-            return input("   [y/N]: ").strip().lower() in ("y", "yes")
+            return input("   Allow? [y/N]: ").strip().lower() in ("y", "yes")
         except EOFError:
             return False
 
@@ -1578,11 +1588,11 @@ def main():
               f"{CYAN}│{RESET} {DIM}Shell commands always ask you before running.{RESET}            {CYAN}│{RESET}\n"
               f"{CYAN}╰──────────────────────────────────────────────────────────╯{RESET}\n")
 
-    def confirm_shell(cmd):
-        print(f"\n⚠️  The assistant wants to run a shell command:\n    {cmd}")
-        speaker.say_blocking("Do you want me to run that command? Type y to confirm.")
+    def confirm_shell(action):
+        print(f"\n⚠️  The assistant wants to: {action}")
+        speaker.say_blocking("Do you allow that? Type y to confirm.")
         try:
-            return input("   Run it? [y/N]: ").strip().lower() in ("y", "yes")
+            return input("   Allow? [y/N]: ").strip().lower() in ("y", "yes")
         except EOFError:
             return False
 
@@ -1607,6 +1617,7 @@ def main():
                 print("🟢 Yes?")
                 speaker.say_blocking("Yes?")
                 engine.flush()          # don't transcribe the "Yes?" echo
+            typed_text = None
             if mode == "push" and practice:
                 # Interview flow: the mic opens right after the coach finishes —
                 # just speak your answer, then press Enter to send it.
@@ -1620,6 +1631,10 @@ def main():
                     speaker.say_blocking("Goodbye!")
                     print("\nGoodbye!")
                     break
+                if action == "type":
+                    typed_text = claude_input().strip()
+                    if not typed_text:
+                        continue
                 if action == "menu":
                     continue
                 if action.startswith("model:"):
@@ -1658,22 +1673,28 @@ def main():
                     reply, _ = respond(history, speaker, engine, vad, current_model, False)
                     history.append({"role": "assistant", "content": reply or "[...]"})
                     continue
-                audio = engine.record_push_to_talk(wait_for_start=False)
-                voiced = len(audio) // voice.FRAME_SIZE if audio is not None else 0
+                if typed_text is None:
+                    audio = engine.record_push_to_talk(wait_for_start=False)
+                    voiced = len(audio) // voice.FRAME_SIZE if audio is not None else 0
+                else:
+                    audio, voiced = None, 0
             else:
                 if handoff is None:
                     print("🎧 Listening... (just start talking)")
                 audio, voiced = engine.capture_utterance(vad, listener=live, prefill=handoff)
                 handoff = None
-            if audio is None or voiced == 0:
-                continue
-            gain_guard.check(audio)
+            if typed_text is not None:
+                text = typed_text
+            else:
+                if audio is None or voiced == 0:
+                    continue
+                gain_guard.check(audio)
 
-            text, segments = transcribe_final(audio, voiced)
-            if looks_like_hallucination(text, segments, len(audio) / voice.SAMPLE_RATE):
-                print("(heard nothing)\n")
-                continue
-            print("You said:", text)
+                text, segments = transcribe_final(audio, voiced)
+                if looks_like_hallucination(text, segments, len(audio) / voice.SAMPLE_RATE):
+                    print("(heard nothing)\n")
+                    continue
+                print("You said:", text)
 
             if text.lower().strip(" .!?") in _EXIT_WORDS:
                 speaker.say_blocking("Goodbye!")

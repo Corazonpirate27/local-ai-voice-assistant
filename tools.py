@@ -171,6 +171,109 @@ def run_shell(command):
     return _run(["bash", "-lc", command])
 
 
+# --- file management (home-scoped, confirmation-gated) -----------------------------
+# The agent may create/modify/move files anywhere under $HOME, EXCEPT protected
+# directories, and every destructive step (overwrite, delete, move-over) asks the
+# user first via the confirm callback. Remote callers (Telegram) always decline.
+_PROTECTED = (".ssh", ".gnupg", ".local/share/keyrings", ".mozilla",
+              ".config/google-chrome", ".pki")
+_HOME = os.path.realpath(os.path.expanduser("~"))
+
+
+def _home_path(rel, purpose="touch"):
+    """Resolve a path under $HOME; return (path, None) or (None, refusal)."""
+    p = os.path.realpath(os.path.expanduser(rel or ""))
+    if not p.startswith(_HOME + os.sep) and p != _HOME:
+        return None, f"Refused: I only {purpose} files inside your home folder."
+    rel_home = os.path.relpath(p, _HOME)
+    for prot in _PROTECTED:
+        if rel_home == prot or rel_home.startswith(prot + os.sep):
+            return None, f"Refused: ~/{prot} is protected (keys/credentials)."
+    return p, None
+
+
+def write_file(path, content, confirm=None):
+    """Create or overwrite a file under the home folder (overwrite asks first)."""
+    p, err = _home_path(path, "write")
+    if err:
+        return err
+    if os.path.isdir(p):
+        return f"{path} is a folder, not a file."
+    if os.path.exists(p):
+        if confirm is None or not confirm(f"overwrite the existing file {path}"):
+            return "The user declined to overwrite that file."
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(content or "")
+        return f"Wrote {path} ({len(content or '')} chars)."
+    except Exception as exc:
+        return f"Couldn't write it: {exc}"
+
+
+def delete_file(path, confirm=None):
+    """Delete a file (never folders) under home — always asks the user first."""
+    p, err = _home_path(path, "delete")
+    if err:
+        return err
+    if not os.path.isfile(p):
+        return f"There is no file at {path} (folders are never deleted)."
+    if confirm is None or not confirm(f"DELETE the file {path}"):
+        return "The user declined the deletion."
+    try:
+        os.unlink(p)
+        return f"Deleted {path}."
+    except Exception as exc:
+        return f"Couldn't delete it: {exc}"
+
+
+def move_file(src, dst, copy=False, confirm=None):
+    """Move or copy a file under home; overwriting a destination asks first."""
+    ps, err = _home_path(src, "move")
+    if err:
+        return err
+    pd, err = _home_path(dst, "move")
+    if err:
+        return err
+    if not os.path.isfile(ps):
+        return f"No file at {src}."
+    if os.path.isdir(pd):
+        pd = os.path.join(pd, os.path.basename(ps))
+    if os.path.exists(pd):
+        if confirm is None or not confirm(f"overwrite {dst} with {src}"):
+            return "The user declined to overwrite the destination."
+    try:
+        os.makedirs(os.path.dirname(pd), exist_ok=True)
+        if copy:
+            shutil.copy2(ps, pd)
+            return f"Copied {src} → {dst}."
+        shutil.move(ps, pd)
+        return f"Moved {src} → {dst}."
+    except Exception as exc:
+        return f"Couldn't do it: {exc}"
+
+
+def list_folder(path="~"):
+    """List the contents of a folder under home (names, sizes, type)."""
+    p, err = _home_path(path or "~", "read")
+    if err:
+        return err
+    if not os.path.isdir(p):
+        return f"{path} is not a folder."
+    entries = []
+    try:
+        for name in sorted(os.listdir(p))[:80]:
+            fp = os.path.join(p, name)
+            if os.path.isdir(fp):
+                entries.append(f"📁 {name}/")
+            else:
+                kb = os.path.getsize(fp) // 1024
+                entries.append(f"   {name} ({kb} KB)")
+    except PermissionError:
+        return f"No permission to read {path}."
+    return f"Contents of {path}:\n" + "\n".join(entries) if entries else f"{path} is empty."
+
+
 # --- documents (read-only) --------------------------------------------------
 DOC_ROOT = os.path.realpath(os.path.expanduser(os.environ.get("VA_DOCS_ROOT", "~")))
 _DOC_EXTS = {".txt", ".md", ".pdf", ".docx", ".rtf", ".csv", ".log", ".json",
@@ -1608,6 +1711,31 @@ TOOLS = [
             "variable": {"type": "string", "description": "Variable name, default x"}},
             "required": ["expression"]}}},
     {"type": "function", "function": {
+        "name": "write_file",
+        "description": ("Create or overwrite a file anywhere in the user's home "
+                        "folder (notes, scripts, configs). Overwriting asks the user "
+                        "first. Protected dirs (.ssh etc.) are refused."),
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "e.g. ~/Documents/notes.md"},
+            "content": {"type": "string"}}, "required": ["path", "content"]}}},
+    {"type": "function", "function": {
+        "name": "delete_file",
+        "description": "Delete a single file under home. ALWAYS asks the user first.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {
+        "name": "move_file",
+        "description": "Move or copy a file under home (set copy=true to copy).",
+        "parameters": {"type": "object", "properties": {
+            "src": {"type": "string"}, "dst": {"type": "string"},
+            "copy": {"type": "boolean"}}, "required": ["src", "dst"]}}},
+    {"type": "function", "function": {
+        "name": "list_folder",
+        "description": "List files and subfolders of a folder in the user's home.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "e.g. ~/Downloads"}},
+            "required": ["path"]}}},
+    {"type": "function", "function": {
         "name": "youtube_transcript",
         "description": ("Get a YouTube video's transcript with timestamps. Use when "
                         "the user shares a YouTube link to summarize, extract key "
@@ -1730,7 +1858,7 @@ def dispatch(name, args, confirm=None):
         return set_brightness(args.get("percent", 50))
     if name == "run_shell":
         command = args.get("command", "")
-        if confirm is not None and not confirm(command):
+        if confirm is not None and not confirm(f"run the shell command: {command}"):
             return "The user declined to run that command."
         return run_shell(command)
     if name == "find_documents":
@@ -1789,6 +1917,15 @@ def dispatch(name, args, confirm=None):
     if name == "save_progress":
         return save_progress(args.get("subject", ""), args.get("covered", ""),
                              args.get("weak_spots", ""), args.get("next_topic", ""))
+    if name == "write_file":
+        return write_file(args.get("path", ""), args.get("content", ""), confirm=confirm)
+    if name == "delete_file":
+        return delete_file(args.get("path", ""), confirm=confirm)
+    if name == "move_file":
+        return move_file(args.get("src", ""), args.get("dst", ""),
+                         bool(args.get("copy")), confirm=confirm)
+    if name == "list_folder":
+        return list_folder(args.get("path", "~"))
     if name == "youtube_transcript":
         return youtube_transcript(args.get("url", ""))
     if name == "create_project_file":

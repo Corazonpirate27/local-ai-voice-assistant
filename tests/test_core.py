@@ -180,3 +180,29 @@ def test_project_tools_sandboxed(tmp_path, monkeypatch):
     assert "Wrote" in T.create_project_file("p/main.py", "print(1)")
     assert "Output:\n1" in T.run_project("p", "python main.py")
     assert "print(1)" in T.review_project("p")
+
+
+# --- home file management: security model ----------------------------------------
+def test_file_tools_guardrails(tmp_path, monkeypatch):
+    home = str(tmp_path)
+    monkeypatch.setattr(T, "_HOME", home)
+    monkeypatch.setenv("HOME", home)
+    # outside home refused
+    assert "Refused" in T.write_file("/etc/nope.txt", "x")
+    # protected dirs refused
+    assert "protected" in T.write_file(f"{home}/.ssh/config", "x")
+    # create works without confirm
+    assert "Wrote" in T.write_file(f"{home}/a.txt", "hello")
+    # overwrite requires confirm; declined
+    assert "declined" in T.write_file(f"{home}/a.txt", "new", confirm=lambda a: False)
+    # overwrite approved
+    assert "Wrote" in T.write_file(f"{home}/a.txt", "new", confirm=lambda a: True)
+    # delete always asks; declined then approved
+    assert "declined" in T.delete_file(f"{home}/a.txt", confirm=lambda a: False)
+    assert "Deleted" in T.delete_file(f"{home}/a.txt", confirm=lambda a: True)
+    # move + copy
+    T.write_file(f"{home}/b.txt", "data")
+    assert "Copied" in T.move_file(f"{home}/b.txt", f"{home}/c.txt", copy=True)
+    assert "Moved" in T.move_file(f"{home}/b.txt", f"{home}/d.txt")
+    out = T.list_folder(home)
+    assert "c.txt" in out and "d.txt" in out
