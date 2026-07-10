@@ -1267,6 +1267,154 @@ def learning_summary(subject=None):
     return "\n".join(lines)
 
 
+# --- self-management: install & switch AI models -----------------------------------
+# The agent can change its own brain; the REPL applies the switch after the turn.
+PENDING_MODEL = [None]
+
+# What fits a ~6 GB GPU, for when the user says "install a good model".
+_MODEL_SUGGESTIONS = ("qwen3:4b (smart, tools)", "qwen3:8b (smartest that fits)",
+                      "llama3.2:3b (fastest)", "phi4-mini (math)",
+                      "gemma3:4b (vision)", "mistral:7b (general)",
+                      "deepseek-r1:8b (reasoning)", "granite3.3:8b (IBM, tools)")
+
+
+def _installed_models():
+    import ollama
+    try:
+        data = ollama.list()
+        models = data.get("models", []) if isinstance(data, dict) else getattr(data, "models", [])
+        return [(m.get("model") if isinstance(m, dict) else getattr(m, "model", "")) or ""
+                for m in models]
+    except Exception:
+        return []
+
+
+def install_model(name, switch=True, confirm=None):
+    """Download an Ollama model (asks the user first — downloads are GBs)."""
+    name = (name or "").strip()
+    if not name or any(c in name for c in " ;|&$"):
+        return ("Give a valid model name, e.g. 'mistral:7b'. Good fits for this "
+                "6 GB GPU: " + ", ".join(_MODEL_SUGGESTIONS))
+    if any(name == m for m in _installed_models()):
+        if switch:
+            PENDING_MODEL[0] = name
+            return f"{name} is already installed — switching to it."
+        return f"{name} is already installed."
+    if confirm is not None and not confirm(f"download the AI model '{name}' (may be several GB)"):
+        return "The user declined the download."
+    try:
+        r = subprocess.run(["ollama", "pull", name], capture_output=True, text=True,
+                           timeout=1800)
+    except subprocess.TimeoutExpired:
+        return "The download is taking too long — try again or pick a smaller model."
+    if r.returncode != 0:
+        err = (r.stderr or "").strip().splitlines()[-1:] or ["unknown error"]
+        return (f"Couldn't pull '{name}': {err[0]}. Check the exact tag on "
+                "ollama.com/library. Suggestions: " + ", ".join(_MODEL_SUGGESTIONS))
+    if switch:
+        PENDING_MODEL[0] = name
+        return f"Installed {name} and switching to it now."
+    return f"Installed {name}."
+
+
+def switch_model(name):
+    """Switch the assistant's own model to an installed one (fuzzy match ok)."""
+    req = "".join(ch for ch in (name or "").lower() if ch.isalnum())
+    if not req:
+        return "Which model? Installed: " + ", ".join(_installed_models())
+    for m in _installed_models():
+        if req in "".join(ch for ch in m.lower() if ch.isalnum()):
+            if any(t in m.lower() for t in ("embed", "bge-", "minilm")):
+                return f"{m} is an embedding model — it can't chat."
+            PENDING_MODEL[0] = m
+            return f"Switching to {m} after this reply."
+    return (f"No installed model matches '{name}'. Installed: "
+            + ", ".join(_installed_models()) + ". I can install_model a new one.")
+
+
+# --- browser & music ----------------------------------------------------------------
+def open_url(url):
+    """Open a web page in the user's browser."""
+    if not (url or "").startswith(("http://", "https://")):
+        return "Give a full http(s) URL."
+    subprocess.Popen(["xdg-open", url], stdout=DEVNULL, stderr=DEVNULL,
+                     start_new_session=True)
+    return f"Opened {url} in the browser."
+
+
+def play_media(query="", service="youtube"):
+    """Play music/video: YouTube (finds and opens the top video) or Spotify
+    (opens the app on a search for the song, or just resumes playback)."""
+    service = (service or "youtube").lower()
+    q = (query or "").strip()
+    if "spotify" in service:
+        argv, _ = _find_app_launch("spotify")
+        if argv is None:
+            return "Spotify doesn't seem to be installed."
+        if not q:
+            res = media_control("play", "spotify")
+            if "No media player" not in res:
+                return "Resuming Spotify playback."
+        subprocess.Popen(argv, stdout=DEVNULL, stderr=DEVNULL, start_new_session=True)
+        if q:
+            time.sleep(3)  # give the client a moment before deep-linking
+            subprocess.Popen(["xdg-open", f"spotify:search:{q}"],
+                             stdout=DEVNULL, stderr=DEVNULL, start_new_session=True)
+            return (f"Opened Spotify search for '{q}' — the results are on screen; "
+                    "say 'pause'/'next' once it plays.")
+        return "Opened Spotify."
+    # YouTube: resolve the top video and open it directly (it starts playing).
+    if not q:
+        return "What should I play on YouTube?"
+    url = None
+    try:
+        from ddgs import DDGS
+        vids = list(DDGS().videos(q + " youtube", max_results=3))
+        for v in vids:
+            u = v.get("content") or v.get("url") or ""
+            if "youtube.com/watch" in u or "youtu.be/" in u:
+                url = u
+                break
+    except Exception:
+        pass
+    if url is None:
+        url = "https://www.youtube.com/results?search_query=" + q.replace(" ", "+")
+        subprocess.Popen(["xdg-open", url], stdout=DEVNULL, stderr=DEVNULL,
+                         start_new_session=True)
+        return f"Opened YouTube search for '{q}'."
+    subprocess.Popen(["xdg-open", url], stdout=DEVNULL, stderr=DEVNULL,
+                     start_new_session=True)
+    return f"Playing on YouTube: {url}"
+
+
+# --- OS health scan -------------------------------------------------------------------
+def system_health_scan():
+    """Read-only health check: failed services, recent errors, disk, ports,
+    pending updates, and whether an antivirus is available."""
+    report = []
+    out = _run(["systemctl", "--failed", "--no-legend", "--plain"], timeout=15)
+    failed = [l for l in out.splitlines() if l.strip() and "0 loaded" not in l]
+    report.append(f"Failed services: {len(failed)}"
+                  + (" — " + "; ".join(f.split()[0] for f in failed[:5]) if failed else " ✓"))
+    out = _run(["journalctl", "-p", "err", "-b", "--no-pager", "-q", "-n", "200"], timeout=15)
+    errs = [l for l in out.splitlines() if l.strip()]
+    report.append(f"Error-level log entries this boot: {len(errs)}")
+    report.append(system_status())
+    out = _run(["ss", "-tuln"], timeout=10)
+    ports = [l.split()[4].rsplit(":", 1)[-1] for l in out.splitlines()[1:] if l.strip()]
+    report.append(f"Listening network ports: {len(set(ports))} ({', '.join(sorted(set(ports))[:10])})")
+    upd = _run(["bash", "-c", "dnf -q check-update 2>/dev/null | grep -c '^[a-zA-Z]' || true"],
+               timeout=45)
+    if upd.strip().isdigit():
+        report.append(f"Pending package updates: {upd.strip()}")
+    if shutil.which("clamscan"):
+        report.append("Antivirus: ClamAV installed — I can run a scan with run_shell.")
+    else:
+        report.append("Antivirus: none installed. Linux malware is rare, but ClamAV "
+                      "can be added (sudo dnf install clamav) if you want scans.")
+    return "OS health report:\n- " + "\n- ".join(report)
+
+
 # --- past-conversation recall -------------------------------------------------------
 CHATS_DIR = os.path.expanduser("~/.local/share/voice-assistant/chats")
 
@@ -1657,6 +1805,41 @@ TOOLS = [
             "player": {"type": "string", "description": "Optional player name, e.g. 'spotify'"}},
             "required": ["action"]}}},
     {"type": "function", "function": {
+        "name": "install_model",
+        "description": ("Download a new Ollama AI model (asks the user first). Use "
+                        "when asked to install/get a new or better model. Good fits "
+                        "for this 6GB GPU: qwen3:4b/8b, llama3.2:3b, mistral:7b, "
+                        "phi4-mini, gemma3:4b, deepseek-r1:8b."),
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "Exact ollama tag, e.g. mistral:7b"},
+            "switch": {"type": "boolean", "description": "Switch to it after install (default true)"}},
+            "required": ["name"]}}},
+    {"type": "function", "function": {
+        "name": "switch_model",
+        "description": ("Switch YOURSELF to a different installed AI model when the "
+                        "user asks (e.g. 'use the coder model', 'switch to mistral')."),
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string"}}, "required": ["name"]}}},
+    {"type": "function", "function": {
+        "name": "open_url",
+        "description": "Open a web page in the user's browser.",
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string"}}, "required": ["url"]}}},
+    {"type": "function", "function": {
+        "name": "play_media",
+        "description": ("Play music or videos: service 'youtube' finds the top video "
+                        "and plays it in the browser; 'spotify' opens Spotify on a "
+                        "search for the song (or resumes playback with no query)."),
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Song/video/artist to play"},
+            "service": {"type": "string", "enum": ["youtube", "spotify"]}}}}},
+    {"type": "function", "function": {
+        "name": "system_health_scan",
+        "description": ("Full read-only OS health check: failed services, error logs, "
+                        "disk/memory, open ports, pending updates, antivirus status. "
+                        "Use when asked to check the system for problems/bugs/viruses."),
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
         "name": "search_chats",
         "description": ("Search PAST conversations with the user. Use when they ask "
                         "'what did we talk about', 'remember when we discussed…', or "
@@ -1919,6 +2102,13 @@ _DISPATCH = {
     "list_reminders": lambda a, c: list_reminders(),
     "cancel_reminders": lambda a, c: cancel_reminders(),
     "media_control": lambda a, c: media_control(a.get("action", ""), a.get("player")),
+    "install_model": lambda a, c: install_model(a.get("name", ""),
+                                                a.get("switch", True), confirm=c),
+    "switch_model": lambda a, c: switch_model(a.get("name", "")),
+    "open_url": lambda a, c: open_url(a.get("url", "")),
+    "play_media": lambda a, c: play_media(a.get("query", ""),
+                                          a.get("service", "youtube")),
+    "system_health_scan": lambda a, c: system_health_scan(),
     "search_chats": lambda a, c: search_chats(a.get("query", "")),
     "remember_fact": lambda a, c: remember_fact(a.get("fact", "")),
     "forget_fact": lambda a, c: forget_fact(a.get("matching", "")),

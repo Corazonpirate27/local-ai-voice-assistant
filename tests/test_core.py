@@ -249,3 +249,30 @@ def test_search_chats(tmp_path, monkeypatch):
     out = T.search_chats("pokhara")
     assert "2026-07-01" in out
     assert "No past conversation" in T.search_chats("zzz-nothing")
+
+
+# --- self-management: install / switch model, health, media ------------------------
+def test_switch_model_sets_pending(monkeypatch):
+    monkeypatch.setattr(T, "_installed_models", lambda: ["qwen2.5-coder:7b", "gemma3:4b",
+                                                         "nomic-embed-text:latest"])
+    T.PENDING_MODEL[0] = None
+    assert "Switching" in T.switch_model("coder")
+    assert T.PENDING_MODEL[0] == "qwen2.5-coder:7b"
+    assert "embedding" in T.switch_model("nomic")           # embed refused
+    assert "No installed model" in T.switch_model("llama99")
+
+
+def test_install_model_guards(monkeypatch):
+    monkeypatch.setattr(T, "_installed_models", lambda: ["gemma3:4b"])
+    assert "declined" in T.install_model("mistral:7b", confirm=lambda a: False)
+    assert "valid model name" in T.install_model("bad name!")
+    T.PENDING_MODEL[0] = None
+    assert "already installed" in T.install_model("gemma3:4b")   # no download
+
+
+def test_play_media_search_fallback(monkeypatch):
+    calls = []
+    monkeypatch.setattr(T.subprocess, "Popen", lambda *a, **k: calls.append(a[0]))
+    monkeypatch.setattr(T, "_find_app_launch", lambda n: (["spotify"], "spotify"))
+    assert "youtube" in T.play_media("lofi beats", "youtube").lower() or calls
+    assert "Spotify" in T.play_media("some song", "spotify")

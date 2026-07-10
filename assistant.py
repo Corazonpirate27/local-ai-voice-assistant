@@ -374,7 +374,10 @@ def agent_system_prompt():
         "says 'good morning' or asks about their day), answer questions about long "
         "documents with ask_document, show desktop notifications, read the clipboard, "
         "OCR text out of images (read_text_from_image), report battery/disk/memory "
-        "(system_status), run Python code, verify math with calculate, and manage "
+        "(system_status), scan overall OS health for problems (system_health_scan), "
+        "install or switch your own AI model when asked (install_model / switch_model), "
+        "open web pages (open_url) and play music or video (play_media on youtube or "
+        "spotify), run Python code, verify math with calculate, and manage "
         "spaced-repetition flashcards, and search past conversations with search_chats when the user references an earlier discussion (when the user asks to review flashcards: list "
         "due cards, quiz one at a time, reveal with flashcard_answer, then "
         "flashcard_grade pass or fail). "
@@ -1708,6 +1711,7 @@ def text_main(agent):
             if agent or active_toolset:
                 agent_respond(history, speaker, current_model, confirm_shell,
                               toolset=active_toolset)
+                current_model = apply_pending_switch(current_model)
             else:
                 reply = respond_text(history, current_model, speaker)
                 history.append({"role": "assistant", "content": reply or "[said nothing]"})
@@ -1856,6 +1860,18 @@ def print_tool_step(label, result, elapsed):
     print(f"  {CYAN}⎿{RESET} {DIM}{lines[0]}{RESET}")
     for ln in lines[1:]:
         print(f"    {DIM}{ln}{RESET}")
+
+
+def apply_pending_switch(current_model):
+    """If the agent asked to install/switch its own model, apply it now."""
+    import tools as T
+    if T.PENDING_MODEL[0]:
+        new = T.PENDING_MODEL[0]
+        T.PENDING_MODEL[0] = None
+        if new != current_model:
+            print(f"🔀 {DIM}now running {model_label(new)}{RESET}")
+        return new
+    return current_model
 
 
 def agent_respond(history, speaker, model, confirm_shell, max_steps=6, toolset=None):
