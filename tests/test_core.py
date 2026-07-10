@@ -231,3 +231,21 @@ def test_push_prompt_conversing_minimal(monkeypatch):
     monkeypatch.setattr(builtins, "input", lambda *a: next(keys))
     assert A.push_prompt("qwen3:4b", conversing=True) == "talk"
     assert A.push_prompt("qwen3:4b", conversing=True) == "menu"
+
+
+# --- memory everywhere + past-chat recall ------------------------------------------
+def test_with_memory_injection(tmp_path):
+    T.MEMORY_FILE = str(tmp_path / "m.json")
+    assert A.with_memory("BASE") == "BASE"          # empty memory: unchanged
+    T.remember_fact("User's name is Arogya")
+    assert "Arogya" in A.with_memory("BASE")
+
+
+def test_search_chats(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(T, "CHATS_DIR", str(tmp_path))
+    (tmp_path / "chat-20260701-100000.json").write_text(json.dumps(
+        [{"role": "user", "content": "plan a trip to Pokhara"}]))
+    out = T.search_chats("pokhara")
+    assert "2026-07-01" in out
+    assert "No past conversation" in T.search_chats("zzz-nothing")

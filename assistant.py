@@ -155,8 +155,8 @@ class Spinner:
 
 SLASH_COMMANDS = ["/agent", "/voice", "/text", "/chat", "/course", "/course start",
                   "/course syllabus", "/course done", "/learn", "/quiz", "/review",
-                  "/practice", "/models", "/model", "/resume", "/history", "/file",
-                  "/help", "/quit"]
+                  "/practice", "/models", "/model", "/resume", "/history", "/memory",
+                  "/file", "/help", "/quit"]
 _INPUT_HIST_FILE = os.path.expanduser("~/.local/share/voice-assistant/input_history")
 
 
@@ -296,6 +296,58 @@ def claude_input():
     return buf
 
 
+def with_memory(base_prompt):
+    """Append what the assistant knows about the user — memory works in EVERY
+    mode, not just agent mode."""
+    import tools as T
+    mem = T.memory_summary()
+    if not mem:
+        return base_prompt
+    return (base_prompt + "\n\nThings you remember about this user from earlier "
+            "sessions (use them naturally, don't recite them):\n" + mem)
+
+
+AUTO_MEMORY = os.environ.get("VA_AUTO_MEMORY", "1") != "0"
+
+
+def auto_memorize(history, model):
+    """Quietly learn from a finished conversation: extract up to 3 lasting facts
+    about the user and store them. Returns the list of new facts."""
+    import ollama
+    import tools as T
+    user_msgs = [m["content"] for m in history
+                 if m.get("role") == "user" and not str(m["content"]).startswith("[")]
+    if len(user_msgs) < 3:
+        return []
+    convo = "\n".join(f"- {str(m)[:300]}" for m in user_msgs[-25:])
+    known = T.memory_summary()
+    try:
+        r = ollama.chat(model=model, messages=[{"role": "user", "content":
+            "From these messages a user wrote to their assistant, extract at most 3 "
+            "LASTING facts about the user worth remembering for future sessions "
+            "(identity, preferences, goals, projects, important life details). "
+            "Ignore one-off requests, questions, and anything already known.\n"
+            + (f"Already known:\n{known}\n" if known else "")
+            + f"\nMessages:\n{convo}\n\n"
+            "Reply with ONLY the facts, one per line starting with '- ', "
+            "or exactly NONE if nothing qualifies."}])
+        out = "".join(strip_think(iter([r["message"]["content"]])))
+    except Exception:
+        return []
+    learned = []
+    for line in out.splitlines():
+        line = line.strip().lstrip("-• ").strip()
+        if not line or line.upper() == "NONE" or len(line) < 8 or len(line) > 200:
+            continue
+        if "already" in line.lower():
+            continue
+        if "I'll remember" in T.remember_fact(line):
+            learned.append(line)
+        if len(learned) >= 3:
+            break
+    return learned
+
+
 def agent_system_prompt():
     """System prompt for agent mode: knows today's date, trusts tools, extracts specifics."""
     import datetime
@@ -323,7 +375,7 @@ def agent_system_prompt():
         "documents with ask_document, show desktop notifications, read the clipboard, "
         "OCR text out of images (read_text_from_image), report battery/disk/memory "
         "(system_status), run Python code, verify math with calculate, and manage "
-        "spaced-repetition flashcards (when the user asks to review flashcards: list "
+        "spaced-repetition flashcards, and search past conversations with search_chats when the user references an earlier discussion (when the user asks to review flashcards: list "
         "due cards, quiz one at a time, reveal with flashcard_answer, then "
         "flashcard_grade pass or fail). "
         "When the user shares lasting personal info (name, preferences, projects), call "
@@ -974,6 +1026,7 @@ HELP_ROWS = [
     ("/model <n|name>",      "switch model (or just say 'switch to qwen')"),
     ("/resume",              "continue your last saved conversation"),
     ("/history",             "list saved conversations — resume or delete them"),
+    ("/memory",              "see what it remembers about you — delete any of it"),
     ("```",                  "start a multi-line code paste (end with ``` alone)"),
     ("/file <path> [question]", "attach a pdf/docx/html/md/txt — or just drop the path"),
     ("/help",                "this list"),
@@ -1198,7 +1251,7 @@ def _voice_stack():
 def text_main(agent):
     """Typed chat loop: same LLM, model switching, and (optional) agent tools."""
     current_model = LLM_MODEL
-    sys_prompt = SYSTEM_PROMPT
+    sys_prompt = with_memory(SYSTEM_PROMPT)
     if agent:
         if not supports_tools(current_model):
             alt = pick_tool_model(available_models())
@@ -1220,10 +1273,7 @@ def text_main(agent):
         except EOFError:
             return False
 
-    _SLASH_COMMANDS = ["/agent", "/voice", "/text", "/chat", "/course",
-                       "/course start", "/course syllabus", "/course done",
-                       "/learn", "/quiz", "/review", "/practice", "/models",
-                       "/model", "/resume", "/history", "/file", "/help", "/quit"]
+    _SLASH_COMMANDS = SLASH_COMMANDS
     try:
         import atexit
         import readline
@@ -1317,6 +1367,7 @@ def text_main(agent):
                 ("/models", "list models"),
                 ("/resume", "continue last conversation"),
                 ("/history", "saved conversations · delete"),
+                ("/memory", "what I remember about you · forget"),
                 ("/file",   "attach a pdf/docx/html/md"),
                 ("/help",   "full command reference"),
                 ("/quit",   "save and exit"),
@@ -1332,6 +1383,34 @@ def text_main(agent):
                 continue
             text = entries[int(sel) - 1][0]
             low = text.lower()
+
+        if low.startswith("/memory"):
+            import tools as T
+            items = T._load_memory()
+            if not items:
+                print("🧠 I don't have any memories about you yet. Tell me things, "
+                      "or just chat — I learn automatically.")
+                continue
+            print(f"\n {ORANGE}✻ What I remember about you{RESET}  "
+                  f"{DIM}(d n delete · clear = forget ALL · Enter close){RESET}")
+            for i, it in enumerate(items, 1):
+                print(f"  {BOLD}{i:>2}{RESET} {it.get('fact', '')}  "
+                      f"{DIM}({it.get('on', '?')}){RESET}")
+            try:
+                sel = input("  choose: ").strip().lower()
+            except EOFError:
+                continue
+            if sel == "clear":
+                if input(f"  Forget ALL {len(items)} memories? [y/N]: ").strip().lower() in ("y", "yes"):
+                    T._save_memory([])
+                    print("  🧠 All memories forgotten.")
+            elif sel.startswith("d") and sel[1:].strip().isdigit():
+                i = int(sel[1:].strip())
+                if 1 <= i <= len(items):
+                    gone = items.pop(i - 1)
+                    T._save_memory(items)
+                    print(f"  🧠 Forgot: {gone.get('fact', '')}")
+            continue
 
         if low.startswith("/history"):
             chats = list_chats()
@@ -1422,7 +1501,7 @@ def text_main(agent):
                         current_model = alt
                 sys_prompt = agent_system_prompt()
             else:
-                sys_prompt = SYSTEM_PROMPT
+                sys_prompt = with_memory(SYSTEM_PROMPT)
             history[0] = {"role": "system", "content": sys_prompt}
             print(f"🤖 AI Agent {'ON — apps · web · files · system' if agent else 'off — plain chat'}"
                   f"{' (model: ' + current_model + ')' if agent else ''}")
@@ -1433,11 +1512,16 @@ def text_main(agent):
                 history = [{"role": "system", "content": sys_prompt}]
                 print("🎈 Chat mode off.")
                 continue
-            history = [{"role": "system", "content": CHAT_PROMPT}]
+            history = [{"role": "system", "content": with_memory(CHAT_PROMPT)}]
             print("🎈 Chat mode — just hanging out. /chat off to end.")
             continue
 
         if low in ("/quit", "/exit", "quit", "exit", "goodbye", "bye"):
+            if AUTO_MEMORY:
+                with Spinner("Remembering…"):
+                    learned = auto_memorize(history, current_model)
+                for fact in learned:
+                    print(f"🧠 {DIM}learned: {fact}{RESET}")
             saved = save_chat(history)
             if saved:
                 print(f"💾 Conversation saved ({os.path.basename(saved)}) — "
@@ -2025,7 +2109,7 @@ def main():
         print("💡 Tip: with loudspeakers, run with --aec so the assistant never "
               "mistakes its own voice for yours.\n")
 
-    sys_prompt = SYSTEM_PROMPT
+    sys_prompt = with_memory(SYSTEM_PROMPT)
     if agent:
         sys_prompt = agent_system_prompt()
         print(f"{CYAN}╭──────────────────────────────────────────────────────────╮{RESET}\n"

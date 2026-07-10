@@ -1267,6 +1267,44 @@ def learning_summary(subject=None):
     return "\n".join(lines)
 
 
+# --- past-conversation recall -------------------------------------------------------
+CHATS_DIR = os.path.expanduser("~/.local/share/voice-assistant/chats")
+
+
+def search_chats(query, limit=6):
+    """Search past saved conversations for a topic; returns dated snippets so the
+    assistant can recall what was discussed before."""
+    if not query or not query.strip():
+        return "No search text given."
+    needle = query.lower()
+    hits = []
+    try:
+        files = sorted((f for f in os.listdir(CHATS_DIR) if f.endswith(".json")),
+                       reverse=True)
+    except FileNotFoundError:
+        return "There are no saved conversations yet."
+    for fname in files[:60]:
+        try:
+            with open(os.path.join(CHATS_DIR, fname), encoding="utf-8") as f:
+                msgs = json.load(f)
+        except Exception:
+            continue
+        when = fname[len("chat-"):-len(".json")][:8]
+        date = f"{when[:4]}-{when[4:6]}-{when[6:8]}"
+        for i, m in enumerate(msgs):
+            content = str(m.get("content", ""))
+            if m.get("role") in ("user", "assistant") and needle in content.lower():
+                j = content.lower().find(needle)
+                snip = content[max(0, j - 60):j + 120].replace("\n", " ").strip()
+                hits.append(f"- [{date}, {m['role']}] …{snip}…")
+                break                       # one hit per conversation is enough
+        if len(hits) >= limit:
+            break
+    if not hits:
+        return f"No past conversation mentions '{query}'."
+    return f"Past conversations mentioning '{query}':\n" + "\n".join(hits)
+
+
 # --- desktop notifications ------------------------------------------------------
 def notify_desktop(title, body=""):
     """Pop a desktop notification (best-effort; silent no-op if unavailable)."""
@@ -1619,6 +1657,14 @@ TOOLS = [
             "player": {"type": "string", "description": "Optional player name, e.g. 'spotify'"}},
             "required": ["action"]}}},
     {"type": "function", "function": {
+        "name": "search_chats",
+        "description": ("Search PAST conversations with the user. Use when they ask "
+                        "'what did we talk about', 'remember when we discussed…', or "
+                        "reference an earlier session."),
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Topic or keyword to find"}},
+            "required": ["query"]}}},
+    {"type": "function", "function": {
         "name": "remember_fact",
         "description": ("Permanently remember a fact about the user (name, preferences, "
                         "projects). Use when the user shares personal info or says "
@@ -1873,6 +1919,7 @@ _DISPATCH = {
     "list_reminders": lambda a, c: list_reminders(),
     "cancel_reminders": lambda a, c: cancel_reminders(),
     "media_control": lambda a, c: media_control(a.get("action", ""), a.get("player")),
+    "search_chats": lambda a, c: search_chats(a.get("query", "")),
     "remember_fact": lambda a, c: remember_fact(a.get("fact", "")),
     "forget_fact": lambda a, c: forget_fact(a.get("matching", "")),
     "look_at_screen": lambda a, c: look_at_screen(a.get("question", "")),
