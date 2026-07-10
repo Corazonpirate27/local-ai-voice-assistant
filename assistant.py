@@ -843,6 +843,7 @@ HELP_ROWS = [
     ("/models",              "installed models with what each is best for"),
     ("/model <n|name>",      "switch model (or just say 'switch to qwen')"),
     ("/resume",              "continue your last saved conversation"),
+    ("/history",             "list saved conversations — resume or delete them"),
     ("```",                  "start a multi-line code paste (end with ``` alone)"),
     ("/file <path> [question]", "attach a pdf/docx/html/md/txt — or just drop the path"),
     ("/help",                "this list"),
@@ -948,6 +949,31 @@ def save_chat(history):
         return path
     except Exception:
         return None
+
+
+def list_chats():
+    """Saved conversations, newest first: [(path, when, preview)]."""
+    import json
+    try:
+        files = sorted((f for f in os.listdir(CHATS_DIR) if f.endswith(".json")),
+                       reverse=True)
+    except FileNotFoundError:
+        return []
+    out = []
+    for f in files[:30]:
+        path = os.path.join(CHATS_DIR, f)
+        preview = ""
+        try:
+            with open(path, encoding="utf-8") as fh:
+                for m in json.load(fh):
+                    if m.get("role") == "user":
+                        preview = str(m.get("content", ""))[:60].replace("\n", " ")
+                        break
+        except Exception:
+            pass
+        when = f[len("chat-"):-len(".json")]
+        out.append((path, when, preview))
+    return out
 
 
 def load_last_chat():
@@ -1064,6 +1090,31 @@ def text_main(agent):
         except EOFError:
             return False
 
+    _SLASH_COMMANDS = ["/agent", "/voice", "/text", "/chat", "/course",
+                       "/course start", "/course syllabus", "/course done",
+                       "/learn", "/quiz", "/review", "/practice", "/models",
+                       "/model", "/resume", "/history", "/file", "/help", "/quit"]
+    try:
+        import atexit
+        import readline
+        hist_file = os.path.expanduser("~/.local/share/voice-assistant/input_history")
+        os.makedirs(os.path.dirname(hist_file), exist_ok=True)
+        try:
+            readline.read_history_file(hist_file)
+        except (FileNotFoundError, OSError):
+            pass
+        readline.set_history_length(500)
+        atexit.register(lambda: readline.write_history_file(hist_file))
+
+        def _complete(prefix, state):
+            opts = [c + " " for c in _SLASH_COMMANDS if c.startswith(prefix)]
+            return opts[state] if state < len(opts) else None
+        readline.set_completer(_complete)
+        readline.set_completer_delims("\n")
+        readline.parse_and_bind("tab: complete")
+    except ImportError:
+        pass
+
     print(text_banner(current_model, agent))
 
     history = [{"role": "system", "content": sys_prompt}]
@@ -1121,6 +1172,77 @@ def text_main(agent):
             if not text:
                 continue
         low = text.lower()
+
+        if text == "/":
+            in_chat = history and history[0].get("content") == CHAT_PROMPT
+            entries = [
+                ("/agent",  f"AI Agent tools      {'🟢 on' if agent else '⚪ off'}"),
+                ("/voice",  f"voice mode          {'🟢 on' if voice_on else '⚪ off'}"),
+                ("/chat",   f"fun chat mode       {'🟢 on' if in_chat else '⚪ off'}"),
+                ("/course", "structured courses"),
+                ("/learn",  "free-form tutor"),
+                ("/quiz",   "graded quiz"),
+                ("/review", "flashcards due"),
+                ("/practice", "role-play (embassy, interview…)"),
+                ("/models", "list models"),
+                ("/resume", "continue last conversation"),
+                ("/history", "saved conversations · delete"),
+                ("/file",   "attach a pdf/docx/html/md"),
+                ("/help",   "full command reference"),
+                ("/quit",   "save and exit"),
+            ]
+            print(f"\n {ORANGE}✻ Commands{RESET}  {DIM}(number to run, Enter to cancel){RESET}")
+            for i, (cmd, desc) in enumerate(entries, 1):
+                print(f"  {BOLD}{i:>2}{RESET} {cmd:<11}{DIM}{desc}{RESET}")
+            try:
+                sel = input("  choose: ").strip()
+            except EOFError:
+                continue
+            if not sel.isdigit() or not 1 <= int(sel) <= len(entries):
+                continue
+            text = entries[int(sel) - 1][0]
+            low = text.lower()
+
+        if low.startswith("/history"):
+            chats = list_chats()
+            if not chats:
+                print("No saved conversations.")
+                continue
+            print(f"\n {ORANGE}✻ Saved conversations{RESET}  "
+                  f"{DIM}(n resume · d n delete · clear = delete ALL · Enter cancel){RESET}")
+            for i, (path, when, preview) in enumerate(chats, 1):
+                print(f"  {BOLD}{i:>2}{RESET} {when}  {DIM}{preview}{RESET}")
+            try:
+                sel = input("  choose: ").strip().lower()
+            except EOFError:
+                continue
+            if sel == "clear":
+                if input(f"  Delete ALL {len(chats)} conversations? [y/N]: ").strip().lower() in ("y", "yes"):
+                    for path, _, _ in list_chats():
+                        try:
+                            os.unlink(path)
+                        except OSError:
+                            pass
+                    print("  🗑️  All conversations deleted.")
+                continue
+            if sel.startswith("d") and sel[1:].strip().isdigit():
+                i = int(sel[1:].strip())
+                if 1 <= i <= len(chats):
+                    try:
+                        os.unlink(chats[i - 1][0])
+                        print(f"  🗑️  Deleted {chats[i - 1][1]}.")
+                    except OSError as exc:
+                        print(f"  couldn't delete: {exc}")
+                continue
+            if sel.isdigit() and 1 <= int(sel) <= len(chats):
+                import json
+                try:
+                    with open(chats[int(sel) - 1][0], encoding="utf-8") as f:
+                        history = json.load(f)
+                    print(f"↩️  Resumed {chats[int(sel) - 1][1]} ({len(history)} messages).")
+                except Exception as exc:
+                    print(f"couldn't load: {exc}")
+            continue
 
         if low.startswith(("/file", "/attach")) or (
                 len(text) < 300 and "\n" not in text):
