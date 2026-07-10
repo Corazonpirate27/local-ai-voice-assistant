@@ -323,6 +323,15 @@ def _extract_text(path):
                 xml = z.read("word/document.xml").decode("utf-8", "ignore")
             xml = xml.replace("</w:p>", "\n")
             return re.sub(r"<[^>]+>", "", xml)
+        if ext in (".html", ".htm"):
+            import html as _html
+            import re
+            with open(path, encoding="utf-8", errors="ignore") as f:
+                raw = f.read()
+            raw = re.sub(r"(?is)<(script|style|head)\b.*?</\1>", " ", raw)
+            raw = re.sub(r"(?i)</(p|div|li|h[1-6]|tr)\s*>|<br\s*/?>", "\n", raw)
+            text = _html.unescape(re.sub(r"(?s)<[^>]+>", " ", raw))
+            return re.sub(r"[ \t]+", " ", text)
         with open(path, encoding="utf-8", errors="ignore") as f:
             return f.read()
     except Exception:

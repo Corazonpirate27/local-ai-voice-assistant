@@ -206,3 +206,28 @@ def test_file_tools_guardrails(tmp_path, monkeypatch):
     assert "Moved" in T.move_file(f"{home}/b.txt", f"{home}/d.txt")
     out = T.list_folder(home)
     assert "c.txt" in out and "d.txt" in out
+
+
+# --- file attach ---------------------------------------------------------------------
+def test_try_attach_formats(tmp_path):
+    md = tmp_path / "notes.md"
+    md.write_text("# Plan\nThe secret budget is 7777 dollars.")
+    ctx, notice = A.try_attach(str(md))
+    assert ctx and "7777" in ctx and "notes.md" in notice
+    html = tmp_path / "page.html"
+    html.write_text("<html><head><style>x{}</style></head><body><p>Hello <b>world</b></p></body></html>")
+    ctx, _ = A.try_attach(str(html))
+    assert "Hello" in ctx and "<p>" not in ctx and "style" not in ctx
+    # quoted drag-and-drop path
+    ctx, _ = A.try_attach(f"'{md}'")
+    assert ctx
+    # not a file → (None, None)
+    assert A.try_attach("just a normal message") == (None, None)
+
+
+def test_push_prompt_conversing_minimal(monkeypatch):
+    import builtins
+    keys = iter(["", "m"])
+    monkeypatch.setattr(builtins, "input", lambda *a: next(keys))
+    assert A.push_prompt("qwen3:4b", conversing=True) == "talk"
+    assert A.push_prompt("qwen3:4b", conversing=True) == "menu"

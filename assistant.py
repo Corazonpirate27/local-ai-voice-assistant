@@ -715,8 +715,10 @@ def respond(history, speaker, engine, vad, model, barge_in=True):
     return " ".join(fed).strip(), None
 
 
-def push_prompt(current_model, practice=None):
-    """Menu shown before each push-to-talk turn. Returns 'talk', 'quit', 'menu',
+def push_prompt(current_model, practice=None, conversing=False):
+    """Prompt before each push-to-talk turn. Mid-conversation it stays minimal so
+    the chat flows like Claude — the full menu only appears on [m].
+    Returns 'talk', 'type', 'quit', 'menu', 'dictate', 'notes',
     'model:<name>', 'practice:<mode>' or 'practice:off'."""
     models = available_models()
     if practice:
@@ -726,6 +728,15 @@ def push_prompt(current_model, practice=None):
                            "[q] quit: ").strip().lower()
         except EOFError:
             return "quit"
+    elif conversing:
+        # Mid-conversation: minimal, the dialogue just continues.
+        try:
+            choice = input(f"{DIM}▶ [Enter] speak · [t] type · [m] menu · "
+                           f"[q] quit:{RESET} ").strip().lower()
+        except EOFError:
+            return "quit"
+        if choice == "m":
+            return "menu"
     else:
         print("\n" + "─" * 60)
         if models:
@@ -827,6 +838,7 @@ HELP_ROWS = [
     ("/model <n|name>",      "switch model (or just say 'switch to qwen')"),
     ("/resume",              "continue your last saved conversation"),
     ("```",                  "start a multi-line code paste (end with ``` alone)"),
+    ("/file <path> [question]", "attach a pdf/docx/html/md/txt — or just drop the path"),
     ("/help",                "this list"),
     ("/quit",                "save the chat and exit"),
 ]
@@ -870,6 +882,36 @@ def text_banner(model, agent):
 
 # --- conversation persistence ---------------------------------------------------
 CHATS_DIR = os.path.expanduser("~/.local/share/voice-assistant/chats")
+
+
+_ATTACH_EXTS = {".pdf", ".docx", ".md", ".txt", ".html", ".htm", ".csv", ".json",
+                ".py", ".js", ".ts", ".c", ".cpp", ".java", ".sh", ".log", ".rtf"}
+ATTACH_MAX_CHARS = int(os.environ.get("VA_ATTACH_MAX", "14000"))
+
+
+def try_attach(raw):
+    """If `raw` is (or starts with) a path to a readable document, extract it.
+    Returns (context_message, notice) or (None, error) or (None, None) if it
+    isn't a file path at all. Handles quoted drag-and-drop paths."""
+    import tools as T
+    candidate = raw.strip().strip("'\"")
+    p = os.path.expanduser(candidate)
+    if not os.path.isfile(p) or os.path.splitext(p)[1].lower() not in _ATTACH_EXTS:
+        return None, None
+    text = T._extract_text(p).strip()
+    if not text:
+        return None, f"📎 Couldn't extract any text from {os.path.basename(p)}."
+    words = len(text.split())
+    clipped = ""
+    if len(text) > ATTACH_MAX_CHARS:
+        text = text[:ATTACH_MAX_CHARS]
+        clipped = (" (long file — first part attached; ask specific questions and "
+                   "I'll search the rest with ask_document)")
+    msg = (f"[The user attached the file '{p}'. Its content follows — answer "
+           f"questions about it from this content.]\n\n{text}")
+    notice = (f"📎 Attached {os.path.basename(p)} — {words:,} words{clipped}. "
+              "Ask me anything about it.")
+    return msg, notice
 
 
 MAX_HISTORY = int(os.environ.get("VA_MAX_HISTORY", "40"))
@@ -1025,6 +1067,32 @@ def text_main(agent):
             if not text:
                 continue
         low = text.lower()
+
+        if low.startswith(("/file", "/attach")) or (
+                len(text) < 300 and "\n" not in text):
+            arg = text.split(maxsplit=1)[1] if low.startswith(("/file", "/attach")) \
+                and " " in text else text
+            # a trailing question after the path is allowed: /file x.pdf summarize it
+            ctx, notice = try_attach(arg)
+            question = None
+            if ctx is None and " " in arg:
+                head, rest = arg.split(maxsplit=1)
+                ctx, notice = try_attach(head)
+                question = rest if ctx else None
+            if notice and ctx is None:
+                print(notice)
+                continue
+            if ctx:
+                trim_history(history).append({"role": "user", "content": ctx})
+                print(notice)
+                if question:
+                    text = question
+                else:
+                    continue
+            elif low.startswith(("/file", "/attach")):
+                print("Usage: /file <path> [question] — pdf, docx, html, md, txt…")
+                continue
+            low = text.lower()
 
         if low in ("/quit", "/exit", "quit", "exit", "goodbye", "bye"):
             saved = save_chat(history)
@@ -1641,6 +1709,7 @@ def main():
     history = [{"role": "system", "content": sys_prompt}]
     handoff = None
     practice = None
+    conversing = False
     try:
         while True:
             if mode == "wake" and handoff is None:
@@ -1658,7 +1727,7 @@ def main():
                 audio = engine.record_push_to_talk(wait_for_start=False)
                 voiced = len(audio) // voice.FRAME_SIZE if audio is not None else 0
             elif mode == "push":
-                action = push_prompt(current_model, practice)
+                action = push_prompt(current_model, practice, conversing)
                 if action == "quit":
                     speaker.say_blocking("Goodbye!")
                     print("\nGoodbye!")
@@ -1668,6 +1737,7 @@ def main():
                     if not typed_text:
                         continue
                 if action == "menu":
+                    conversing = False       # show the full menu next round
                     continue
                 if action.startswith("model:"):
                     current_model = action.split(":", 1)[1]
@@ -1716,6 +1786,13 @@ def main():
                 audio, voiced = engine.capture_utterance(vad, listener=live, prefill=handoff)
                 handoff = None
             if typed_text is not None:
+                ctx, notice = try_attach(typed_text)
+                if ctx:
+                    trim_history(history).append({"role": "user", "content": ctx})
+                    print(notice)
+                    speaker.say_blocking("File attached. Ask me about it.")
+                    conversing = True
+                    continue
                 text = typed_text
             else:
                 if audio is None or voiced == 0:
@@ -1772,6 +1849,7 @@ def main():
                     # Practice is pure conversation: streaming reply, no tools.
                     reply, handoff = respond(history, speaker, engine, vad, current_model, barge_in)
                     history.append({"role": "assistant", "content": reply or "[said nothing]"})
+                conversing = True            # keep the dialogue flowing turn to turn
             except Exception as exc:                   # never crash the conversation
                 history.pop()
                 handoff = None
