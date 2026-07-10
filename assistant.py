@@ -153,17 +153,147 @@ class Spinner:
         self.stop()
 
 
+SLASH_COMMANDS = ["/agent", "/voice", "/text", "/chat", "/course", "/course start",
+                  "/course syllabus", "/course done", "/learn", "/quiz", "/review",
+                  "/practice", "/models", "/model", "/resume", "/history", "/file",
+                  "/help", "/quit"]
+_INPUT_HIST_FILE = os.path.expanduser("~/.local/share/voice-assistant/input_history")
+
+
+def _cmd_desc(cmd):
+    for c, d in HELP_ROWS:
+        if d and (c == cmd or c.split()[0] == cmd):
+            return d
+    return ""
+
+
+def _read_key(fd):
+    """Read one key (handles escape sequences and UTF-8 multibyte)."""
+    b = os.read(fd, 1)
+    if not b:
+        return "EOF"
+    if b == b"\x1b":                                    # escape sequence
+        seq = os.read(fd, 1)
+        if seq == b"[":
+            code = os.read(fd, 1)
+            return {b"A": "UP", b"B": "DOWN", b"C": "RIGHT", b"D": "LEFT"}.get(code, "")
+        return "ESC"
+    n = 0
+    if b[0] >= 0xF0:
+        n = 3
+    elif b[0] >= 0xE0:
+        n = 2
+    elif b[0] >= 0xC0:
+        n = 1
+    for _ in range(n):
+        b += os.read(fd, 1)
+    try:
+        return b.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+
+
 def claude_input():
-    """Claude-Code-style bordered input box. Returns the entered text."""
+    """Claude-Code-style input box. Typing '/' pops a live dropdown of commands:
+    ↑/↓ select, Tab fills, Enter runs. ↑ recalls input history otherwise."""
     if not _TTY:
         return input("> ")
+    try:
+        import termios
+        import tty
+    except ImportError:
+        return input("> ")
+
     width = min(_term_width() - 1, 100)
     print(f"{DIM}╭{'─' * (width - 2)}╮{RESET}")
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    buf, sel, shown = "", 0, 0
     try:
-        text = input(f"{DIM}│{RESET} > ")
+        with open(_INPUT_HIST_FILE, encoding="utf-8") as f:
+            hist = [ln.rstrip("\n") for ln in f if ln.strip()][-200:]
+    except OSError:
+        hist = []
+    hidx = len(hist)
+
+    def suggestions():
+        if not buf.startswith("/") or " " in buf:
+            return []
+        return [c for c in SLASH_COMMANDS if c.startswith(buf)][:8]
+
+    def render(sugg):
+        nonlocal shown
+        for i, c in enumerate(sugg):
+            mark = f"{ORANGE}▸{RESET}" if i == sel else " "
+            desc = _cmd_desc(c)[:max(10, width - 26)]
+            sys.stdout.write(f"\r\n\x1b[K  {mark} {BOLD}{c:<18}{RESET}{DIM}{desc}{RESET}")
+        for _ in range(max(0, shown - len(sugg))):        # clear leftovers
+            sys.stdout.write("\r\n\x1b[K")
+        lines_below = max(shown, len(sugg))
+        if lines_below:
+            sys.stdout.write(f"\x1b[{lines_below}A")
+        shown = len(sugg)
+        sys.stdout.write(f"\r\x1b[K{DIM}│{RESET} > {buf}")   # cursor at end of input
+        sys.stdout.flush()
+
+    try:
+        tty.setcbreak(fd)
+        render(suggestions())
+        while True:
+            key = _read_key(fd)
+            sugg = suggestions()
+            if key in ("\r", "\n"):
+                if sugg and buf != sugg[sel]:
+                    buf = sugg[sel]                       # Enter runs the selection
+                break
+            if key == "EOF" or key == "\x04":
+                if not buf:
+                    raise EOFError
+                break
+            if key == "\x03":
+                raise KeyboardInterrupt
+            if key == "\x7f":                            # backspace
+                buf = buf[:-1]
+            elif key == "\t" or (key == "RIGHT" and sugg):
+                if sugg:
+                    buf = sugg[sel] + (" " if sugg[sel] in
+                                       ("/model", "/file", "/learn", "/quiz",
+                                        "/practice", "/course start") else "")
+            elif key == "UP":
+                if sugg:
+                    sel = (sel - 1) % len(sugg)
+                elif hist:
+                    hidx = max(0, hidx - 1)
+                    buf = hist[hidx]
+            elif key == "DOWN":
+                if sugg:
+                    sel = (sel + 1) % len(sugg)
+                elif hist:
+                    hidx = min(len(hist), hidx + 1)
+                    buf = hist[hidx] if hidx < len(hist) else ""
+            elif key == "ESC":
+                buf = ""
+            elif key and key.isprintable():
+                buf += key
+                sel = 0
+            render(suggestions())
     finally:
-        print(f"{DIM}╰{'─' * (width - 2)}╯{RESET}")
-    return text
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        sys.stdout.write("\r\n")
+        for _ in range(shown):                            # wipe the dropdown
+            sys.stdout.write("\x1b[K\r\n")
+        if shown:
+            sys.stdout.write(f"\x1b[{shown}A")
+        sys.stdout.write(f"\x1b[K{DIM}╰{'─' * (width - 2)}╯{RESET}\n")
+        sys.stdout.flush()
+    if buf.strip():
+        try:
+            os.makedirs(os.path.dirname(_INPUT_HIST_FILE), exist_ok=True)
+            with open(_INPUT_HIST_FILE, "a", encoding="utf-8") as f:
+                f.write(buf.strip() + "\n")
+        except OSError:
+            pass
+    return buf
 
 
 def agent_system_prompt():
