@@ -1,5 +1,5 @@
 [Unit]
-Description=Voice Assistant (wake-word, agent mode)
+Description=AI Agent (wake-word voice, agent tools)
 # Needs the user session's audio (PipeWire) and D-Bus.
 After=default.target pipewire.service
 Wants=pipewire.service

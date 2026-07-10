@@ -1,4 +1,4 @@
-# Voice Assistant
+# AI Agent — voice + text assistant
 
 A fully local, offline voice assistant that feels like a real voice-mode chat:
 

@@ -15,8 +15,9 @@ Features:
   * Optional system echo cancellation (--aec) for clean barge-in on speakers.
 
 Usage:
-    python assistant.py                # push-to-talk (Enter to start/stop) — default
-    python assistant.py --text         # typed chat, no mic/speaker (add --agent for tools)
+    python assistant.py                # AI Agent REPL (default): text + /voice, /agent,
+                                       #   /chat, /course — everything via / commands
+    python assistant.py --push         # classic voice pipeline, push-to-talk
     python assistant.py --agent        # let it open apps, control system, read documents
     python assistant.py --auto         # hands-free VAD listening (may catch mic noise)
     python assistant.py --wake         # hands-free via wake word: say "hey jarvis"
@@ -819,6 +820,11 @@ def load_whisper(name):
 
 
 HELP_ROWS = [
+    ("MODES", ""),
+    ("/agent",               "toggle AI Agent tools: apps · web · files · system"),
+    ("/voice",               "voice mode — empty Enter speaks, replies are spoken"),
+    ("/text",                "back to typing only"),
+    ("/chat",                "fun casual chat mode (/chat off to end)"),
     ("STUDY", ""),
     ("/course",              "structured courses — continue where you left off"),
     ("/course list",         "the 9 courses (python, cs, math, physics, ai, cybersec, software-eng, webdev, english)"),
@@ -870,11 +876,11 @@ def text_banner(model, agent):
     return "\n".join([
         "",
         f"{DIM}╭{'─' * inner}╮{RESET}",
-        row(f"{ORANGE}✻{RESET} {BOLD}Voice Assistant{RESET}"),
+        row(f"{ORANGE}✻{RESET} {BOLD}AI Agent{RESET} {DIM}· voice + text{RESET}"),
         row(),
         row(f"{DIM}model:{RESET} {model_label(model)}", pad=3),
         row(f"{DIM}tools:{RESET} " + tools + f"   {DIM}cwd:{RESET} {cwd}", pad=3),
-        row(f"{DIM}/help for commands · /course to study · /quit to exit{RESET}", pad=3),
+        row(f"{DIM}/ for everything — /agent · /voice · /chat · /course · /help{RESET}", pad=3),
         f"{DIM}╰{'─' * inner}╯{RESET}",
         "",
     ])
@@ -977,9 +983,13 @@ class TextSpeaker:
         print(f"🔊 {text}")
 
 
-def respond_text(history, model):
-    """Stream a reply to stdout, showing the model's thinking dimmed. Returns the answer."""
+def respond_text(history, model, speaker=None):
+    """Stream a reply to stdout (thinking dimmed); optionally speak it sentence by
+    sentence through `speaker`. Returns the answer text."""
     reply, in_think, in_answer = [], False, False
+    interrupt = threading.Event()
+    if speaker is not None:
+        speaker.begin(interrupt)
     for kind, text in split_think_stream(ollama_tokens(history, model)):
         if kind == "think":
             if not SHOW_THINK:
@@ -998,7 +1008,35 @@ def respond_text(history, model):
             print(text, end="", flush=True)
             reply.append(text)
     print()
-    return "".join(reply).strip()
+    answer = "".join(reply).strip()
+    if speaker is not None:
+        for sentence in stream_sentences(iter([answer])):
+            speakable = sanitize_for_tts(sentence)
+            if speakable:
+                speaker.feed(speakable)
+        speaker.end()
+    return answer
+
+
+CHAT_PROMPT = (
+    "You are a fun, warm, witty companion. Be playful, use light humor and the "
+    "occasional emoji, ask follow-up questions, keep it casual and human — like "
+    "chatting with a good friend. No lectures unless asked.")
+
+
+def _voice_stack():
+    """Lazy-load everything needed to hear and speak inside the unified REPL."""
+    _load_voice()
+    print(f"{DIM}Loading speech stack (Whisper + TTS)…{RESET}")
+    model = load_whisper(WHISPER_MODEL)
+    engine = voice.AudioEngine()
+    speaker = voice.Speaker()
+    fp16 = os.environ.get("VA_FP16", "0") == "1"
+    lang = None if LANG.lower() in ("", "auto") else LANG
+    print(f"🎤 {engine.input_name} — press Enter on an empty line to speak; "
+          "type normally for text; /text to leave voice mode.")
+    return {"model": model, "engine": engine, "speaker": speaker,
+            "fp16": fp16, "lang": lang}
 
 
 def text_main(agent):
@@ -1030,6 +1068,8 @@ def text_main(agent):
 
     history = [{"role": "system", "content": sys_prompt}]
     active_toolset = None     # study/review sessions bring their own tool subset
+    vstack = None             # loaded on /voice: whisper + mic + tts
+    voice_on = False
     while True:
         try:
             text = claude_input().strip()
@@ -1038,7 +1078,21 @@ def text_main(agent):
             print("\nGoodbye!")
             break
         if not text:
-            continue
+            if not (voice_on and vstack):
+                continue
+            print("🎙️  Speaking… press Enter to stop.")
+            audio = vstack["engine"].record_push_to_talk(wait_for_start=False)
+            if audio is None or not len(audio):
+                continue
+            result = vstack["model"].transcribe(
+                audio.flatten(), fp16=vstack["fp16"], language=vstack["lang"],
+                condition_on_previous_text=False)
+            text = result["text"].strip()
+            if looks_like_hallucination(text, result.get("segments", []),
+                                        len(audio) / 16000):
+                print("(heard nothing)")
+                continue
+            print(f"{DIM}you said:{RESET} {text}")
         if text.lower().strip() == "/resume":
             old, path = load_last_chat()
             if not old:
@@ -1093,6 +1147,43 @@ def text_main(agent):
                 print("Usage: /file <path> [question] — pdf, docx, html, md, txt…")
                 continue
             low = text.lower()
+
+        if low in ("/voice", "/voice on"):
+            if vstack is None:
+                vstack = _voice_stack()
+            voice_on = True
+            speaker = vstack["speaker"]
+            print("🎙️  Voice mode ON — empty Enter to speak, replies are spoken. /text to switch back.")
+            continue
+        if low in ("/text", "/voice off"):
+            voice_on = False
+            speaker = TextSpeaker()
+            print("⌨️  Text mode — replies on screen only.")
+            continue
+        if low.startswith("/agent"):
+            arg = low.split()[-1] if " " in low else ("off" if agent else "on")
+            agent = arg != "off"
+            if agent:
+                if not supports_tools(current_model):
+                    alt = pick_tool_model(available_models())
+                    if alt:
+                        current_model = alt
+                sys_prompt = agent_system_prompt()
+            else:
+                sys_prompt = SYSTEM_PROMPT
+            history[0] = {"role": "system", "content": sys_prompt}
+            print(f"🤖 AI Agent {'ON — apps · web · files · system' if agent else 'off — plain chat'}"
+                  f"{' (model: ' + current_model + ')' if agent else ''}")
+            continue
+        if low.startswith("/chat"):
+            if low.endswith("off"):
+                sys_prompt = agent_system_prompt() if agent else SYSTEM_PROMPT
+                history = [{"role": "system", "content": sys_prompt}]
+                print("🎈 Chat mode off.")
+                continue
+            history = [{"role": "system", "content": CHAT_PROMPT}]
+            print("🎈 Chat mode — just hanging out. /chat off to end.")
+            continue
 
         if low in ("/quit", "/exit", "quit", "exit", "goodbye", "bye"):
             saved = save_chat(history)
@@ -1225,7 +1316,7 @@ def text_main(agent):
                 agent_respond(history, speaker, current_model, confirm_shell,
                               toolset=active_toolset)
             else:
-                reply = respond_text(history, current_model)
+                reply = respond_text(history, current_model, speaker)
                 history.append({"role": "assistant", "content": reply or "[...]"})
             continue
 
@@ -1246,7 +1337,7 @@ def text_main(agent):
             label = f"{country} embassy" if (arg == "embassy" and country) else arg.capitalize()
             print(f"🎭 {label} practice — say 'stop practice' or "
                   "/practice off to end.")
-            reply = respond_text(history, current_model)
+            reply = respond_text(history, current_model, speaker)
             history.append({"role": "assistant", "content": reply or "[...]"})
             continue
         if low.startswith("/model"):
@@ -1282,7 +1373,7 @@ def text_main(agent):
                 agent_respond(history, speaker, current_model, confirm_shell,
                               toolset=active_toolset)
             else:
-                reply = respond_text(history, current_model)
+                reply = respond_text(history, current_model, speaker)
                 history.append({"role": "assistant", "content": reply or "[said nothing]"})
         except Exception as exc:                       # never crash the conversation
             history.pop()
@@ -1517,7 +1608,7 @@ def doctor():
     """Self-check: verify every dependency the assistant needs and print fixes."""
     ok = lambda: print(f"  {GREEN}✓{RESET}", end=" ")
     bad = lambda: print(f"  ✗", end=" ")
-    print(f"{CYAN}🩺 Voice assistant self-check{RESET}\n")
+    print(f"{CYAN}🩺 AI Agent self-check{RESET}\n")
 
     print("Ollama")
     try:
@@ -1604,10 +1695,12 @@ def main():
     barge_in = BARGE_IN and "--no-barge-in" not in sys.argv
     agent = "--agent" in sys.argv or os.environ.get("VA_AGENT", "0") == "1"
 
-    if "--text" in sys.argv or os.environ.get("VA_TEXT", "0") == "1":
+    classic_voice = any(f in sys.argv for f in ("--push", "--auto", "--wake")) \
+        or os.environ.get("VA_CLASSIC", "0") == "1"
+    if not classic_voice:               # default: the unified AI Agent REPL
         text_main(agent)
         return
-    _load_voice()                       # voice mode from here on
+    _load_voice()                       # classic voice pipeline from here on
     use_aec = "--aec" in sys.argv or os.environ.get("VA_AEC", "0") == "1"
     # fp16 is off by default: GTX 16-series GPUs produce NaN logits in half precision.
     # The model still runs on GPU in fp32. Set VA_FP16=1 on GPUs that support it.
