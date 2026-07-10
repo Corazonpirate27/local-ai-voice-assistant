@@ -9,6 +9,7 @@ ollama              # local LLM client (streaming + tool calling + vision)
 ddgs                # web search (DuckDuckGo, no API key)
 httpx               # weather (Open-Meteo), page fetching, Tavily
 openwakeword        # wake-word detection ("hey jarvis") for --wake mode
+mcp                 # Model Context Protocol client (connect PyCharm/JetBrains, etc.)
 youtube-transcript-api  # YouTube video summarization
 pytest              # test suite (tests/)
 coqui-tts           # natural neural text-to-speech (VITS by default)

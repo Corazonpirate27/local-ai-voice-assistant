@@ -276,3 +276,36 @@ def test_play_media_search_fallback(monkeypatch):
     monkeypatch.setattr(T, "_find_app_launch", lambda n: (["spotify"], "spotify"))
     assert "youtube" in T.play_media("lofi beats", "youtube").lower() or calls
     assert "Spotify" in T.play_media("some song", "spotify")
+
+
+# --- MCP client ----------------------------------------------------------------------
+def test_mcp_manager_roundtrip(tmp_path):
+    import mcp_client
+    server = tmp_path / "srv.py"
+    server.write_text(
+        "from mcp.server.fastmcp import FastMCP\n"
+        "m = FastMCP('t')\n"
+        "@m.tool()\n"
+        "def shout(s: str) -> str:\n"
+        "    'Uppercase a string.'\n"
+        "    return s.upper()\n"
+        "m.run()\n")
+    mgr = mcp_client.MCPManager()
+    try:
+        res = mgr.connect({"t": {"command": os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "venv/bin/python"),
+            "args": [str(server)]}})
+        assert "connected" in res["t"]
+        names = [t["function"]["name"] for t in mgr.ollama_tools()]
+        assert "mcp__t__shout" in names
+        assert mgr.has("mcp__t__shout")
+        assert mgr.call("mcp__t__shout", {"s": "hi"}) == "HI"
+        assert "🟢 t" in mgr.status()
+    finally:
+        mgr.close()
+
+
+def test_mcp_load_config_missing(monkeypatch, tmp_path):
+    import mcp_client
+    monkeypatch.setattr(mcp_client, "CONFIG_PATH", str(tmp_path / "none.json"))
+    assert mcp_client.load_config() == {}

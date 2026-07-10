@@ -1,0 +1,14 @@
+{
+  "//": "Copy to ~/.config/voice-assistant/mcp.json. Same format as Claude Desktop.",
+  "mcpServers": {
+    "jetbrains": {
+      "//": "Requires the 'MCP Server' plugin installed in your running PyCharm/IntelliJ (Settings → Plugins → search 'MCP Server'). The proxy auto-detects the IDE.",
+      "command": "npx",
+      "args": ["-y", "@jetbrains/mcp-proxy"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/corazonpc"]
+    }
+  }
+}
