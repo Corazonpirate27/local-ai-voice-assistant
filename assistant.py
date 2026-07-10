@@ -156,7 +156,7 @@ class Spinner:
 SLASH_COMMANDS = ["/agent", "/voice", "/text", "/chat", "/course", "/course start",
                   "/course syllabus", "/course done", "/learn", "/quiz", "/review",
                   "/practice", "/models", "/model", "/resume", "/history", "/memory",
-                  "/mcp", "/mcp connect", "/file", "/help", "/quit"]
+                  "/file", "/help", "/quit"]
 _INPUT_HIST_FILE = os.path.expanduser("~/.local/share/voice-assistant/input_history")
 
 
@@ -448,8 +448,7 @@ def activity_label(fn, args):
         "flashcards_due": "📇 Checking due cards",
         "flashcard_answer": f"📇 Revealing card {a.get('card_id', '')}",
         "flashcard_grade": f"📇 Grading card {a.get('card_id', '')}: {a.get('result', '')}",
-    }.get(fn, (f"🧩 {fn.split('__')[1]}: {fn.split('__', 2)[2].replace('_', ' ')}"
-               if fn.startswith("mcp__") and fn.count('__') >= 2 else f"🛠️  {fn}"))
+    }.get(fn, f"🛠️  {fn}")
 
 
 def split_think_stream(tokens):
@@ -1031,7 +1030,6 @@ HELP_ROWS = [
     ("/resume",              "continue your last saved conversation"),
     ("/history",             "list saved conversations — resume or delete them"),
     ("/memory",              "see what it remembers about you — delete any of it"),
-    ("/mcp",                 "connect MCP servers (PyCharm/JetBrains, filesystem…)"),
     ("```",                  "start a multi-line code paste (end with ``` alone)"),
     ("/file <path> [question]", "attach a pdf/docx/html/md/txt — or just drop the path"),
     ("/help",                "this list"),
@@ -1300,14 +1298,6 @@ def text_main(agent):
     except ImportError:
         pass
 
-    try:
-        import mcp_client
-        if mcp_client.load_config():
-            for name, st in mcp_client.MANAGER.connect().items():
-                print(f"🧩 MCP {name}: {st}")
-    except Exception as _mcp_exc:
-        print(f"{DIM}(MCP unavailable: {_mcp_exc}){RESET}")
-
     print(text_banner(current_model, agent))
 
     history = [{"role": "system", "content": sys_prompt}]
@@ -1381,7 +1371,6 @@ def text_main(agent):
                 ("/resume", "continue last conversation"),
                 ("/history", "saved conversations · delete"),
                 ("/memory", "what I remember about you · forget"),
-                ("/mcp", "connect IDEs/tools via MCP (PyCharm…)"),
                 ("/file",   "attach a pdf/docx/html/md"),
                 ("/help",   "full command reference"),
                 ("/quit",   "save and exit"),
@@ -1397,26 +1386,6 @@ def text_main(agent):
                 continue
             text = entries[int(sel) - 1][0]
             low = text.lower()
-
-        if low.startswith("/mcp"):
-            import mcp_client
-            arg = low.split()[1] if len(low.split()) > 1 else ""
-            if arg in ("connect", "reconnect", "on"):
-                cfg = mcp_client.load_config()
-                if not cfg:
-                    print(f"No MCP servers configured. Create {mcp_client.CONFIG_PATH} "
-                          "(see mcp.example.json). JetBrains: install the 'MCP Server' "
-                          "plugin in PyCharm, then add the jetbrains entry.")
-                    continue
-                print("🧩 Connecting to MCP servers…")
-                for name, st in mcp_client.MANAGER.connect(cfg).items():
-                    print(f"   {name}: {st}")
-            elif arg in ("off", "disconnect"):
-                mcp_client.MANAGER.close()
-                print("🧩 MCP disconnected.")
-            else:
-                print(mcp_client.MANAGER.status())
-            continue
 
         if low.startswith("/memory"):
             import tools as T
@@ -1947,10 +1916,8 @@ def agent_respond(history, speaker, model, confirm_shell, max_steps=6, toolset=N
     for _ in range(max_steps):
         try:
             with Spinner():
-                import mcp_client
-                base_tools = toolset if toolset is not None else T.GENERAL_TOOLS
-                all_tools = base_tools + mcp_client.MANAGER.ollama_tools()
-                r = ollama.chat(model=model, messages=history, tools=all_tools)
+                r = ollama.chat(model=model, messages=history,
+                                tools=toolset if toolset is not None else T.GENERAL_TOOLS)
         except Exception as exc:
             if "does not support tools" not in str(exc).lower():
                 raise
@@ -1975,11 +1942,7 @@ def agent_respond(history, speaker, model, confirm_shell, max_steps=6, toolset=N
             fn, args = c["function"]["name"], c["function"]["arguments"]
             label = activity_label(fn, args)
             t0 = time.monotonic()
-            import mcp_client
-            if mcp_client.MANAGER.has(fn):
-                with Spinner(label):
-                    result = mcp_client.MANAGER.call(fn, args)
-            elif fn == "run_shell":                     # needs interactive confirm; no spinner
+            if fn == "run_shell":                       # needs interactive confirm; no spinner
                 print(f"{CYAN}▶{RESET} {label}")
                 result = T.dispatch(fn, args, confirm=confirm_shell)
             else:

@@ -319,21 +319,3 @@ interruption fades the voice out within ~50 ms.
 reference clip, and `torchcodec` cannot load against the system **ffmpeg 8** (it
 only ships bindings for ffmpeg 4–7). To use it you'd need an ffmpeg ≤ 7 build,
 then set `VA_COQUI_MODEL=tts_models/multilingual/multi-dataset/xtts_v2`.
-
-
-## MCP — connect PyCharm/JetBrains & other tools
-
-The agent is an **MCP (Model Context Protocol) client**: it can drive any MCP
-server — most notably **JetBrains IDEs** (PyCharm, IntelliJ…) — to read your
-project, open files, fetch errors, run configurations, and more.
-
-Setup:
-1. In PyCharm: **Settings → Plugins → Marketplace → "MCP Server" → Install**, restart.
-2. `cp mcp.example.json ~/.config/voice-assistant/mcp.json` (has JetBrains +
-   filesystem entries; needs Node.js for the `npx` proxies).
-3. Start the agent and run `/mcp connect` (it also auto-connects at launch if the
-   config exists). `/mcp` shows status; `/mcp off` disconnects.
-
-MCP tools appear to the agent as `mcp__<server>__<tool>` and can be called just
-like built-in tools — e.g. "what files are open in PyCharm?", "show the errors in
-my project". Any MCP server works (GitHub, Slack, databases…), not just JetBrains.
