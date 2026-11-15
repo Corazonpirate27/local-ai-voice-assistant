@@ -276,3 +276,20 @@ def test_play_media_search_fallback(monkeypatch):
     monkeypatch.setattr(T, "_find_app_launch", lambda n: (["spotify"], "spotify"))
     assert "youtube" in T.play_media("lofi beats", "youtube").lower() or calls
     assert "Spotify" in T.play_media("some song", "spotify")
+
+
+def test_create_homework_docx(tmp_path, monkeypatch):
+    monkeypatch.setattr(T.subprocess, "Popen", lambda *a, **k: None)
+    out = T.create_homework_docx("Physics Homework", "## Motion\n- Velocity\n1. Acceleration", "test_hw", str(tmp_path))
+    assert "Physics Homework" in out or "created" in out.lower()
+    f = tmp_path / "test_hw.docx"
+    assert f.exists()
+
+
+def test_browse_and_read_webpage(monkeypatch):
+    monkeypatch.setattr(T.subprocess, "Popen", lambda *a, **k: None)
+    monkeypatch.setattr(T, "fetch_webpage", lambda url, max_chars=4000: "Mock Webpage Content")
+    res = T.browse_and_read_webpage("https://example.com")
+    assert "https://example.com" in res
+    assert "Mock Webpage Content" in res
+

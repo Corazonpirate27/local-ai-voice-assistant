@@ -33,7 +33,7 @@ Config via environment variables:
     VA_STT_LIVE_MODEL  fast model for live partials      (default: base)
     VA_STT_INTERVAL    seconds between live updates       (default: 0.7)
     VA_LANG            language code, or 'auto'          (default: en)
-    VA_LLM_MODEL       Ollama model name                 (default: gemma3:4b)
+    VA_LLM_MODEL       Ollama model name                 (default: qwen3:4b)
     VA_TTS             coqui | espeak | none             (default: coqui)
     VA_BARGE_IN        set to 0 to disable barge-in      (default: 1)
     VA_AEC             set to 1 to enable echo cancel    (default: 0)
@@ -483,7 +483,7 @@ def split_think_stream(tokens):
 WHISPER_MODEL = os.environ.get("VA_WHISPER_MODEL", "small")
 LIVE_MODEL = os.environ.get("VA_STT_LIVE_MODEL", "base")
 LANG = os.environ.get("VA_LANG", "en")
-LLM_MODEL = os.environ.get("VA_LLM_MODEL", "gemma3:4b")
+LLM_MODEL = os.environ.get("VA_LLM_MODEL", "qwen3:4b")
 # Manual push-to-talk by default: press Enter to start/stop. Automatic VAD listening
 # and barge-in are opt-in because they can self-trigger on background mic noise.
 MODE = os.environ.get("VA_MODE", "push")

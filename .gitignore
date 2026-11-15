@@ -1,7 +1,45 @@
+# Virtual Environment & Python cache
 venv/
+.venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# Audio / User Voice Recordings (Personal Privacy)
+candidate_audio/
+*.wav
+*.mp3
+*.m4a
+*.ogg
+*.flac
+session_index.json
 mic_input.wav
 va_mic_input.wav
+
+# Personal Session Transcripts & Temporary Notes
+*speaking_transcript*.txt
+test_write.txt
 *.log
-.pytest_cache/
+
+# Sensitive Configs & Credentials
+config.toml
+.env
+.env.*
+*.pem
+*.key
+
+# Local Data & User Memory
+.*_memory.json
+.*_lists.json
+.*_courses.json
+*.db
+*.sqlite3
+
+# IDEs & System files
+.vscode/
+.idea/
+.claude/
+.DS_Store
+*speaking*.txt
+*session*.txt
+session_index.json

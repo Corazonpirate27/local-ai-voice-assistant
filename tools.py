@@ -1317,7 +1317,7 @@ def install_model(name, switch=True, confirm=None):
     return f"Installed {name}."
 
 
-def switch_model(name):
+def switch_model(name, confirm=None):
     """Switch the assistant's own model to an installed one (fuzzy match ok)."""
     req = "".join(ch for ch in (name or "").lower() if ch.isalnum())
     if not req:
@@ -1326,6 +1326,8 @@ def switch_model(name):
         if req in "".join(ch for ch in m.lower() if ch.isalnum()):
             if any(t in m.lower() for t in ("embed", "bge-", "minilm")):
                 return f"{m} is an embedding model — it can't chat."
+            if confirm and not confirm(f"switch active model to '{m}'"):
+                return f"Model switch to '{m}' declined by user."
             PENDING_MODEL[0] = m
             return f"Switching to {m} after this reply."
     return (f"No installed model matches '{name}'. Installed: "
@@ -1344,47 +1346,166 @@ def open_url(url):
 
 def play_media(query="", service="youtube"):
     """Play music/video: YouTube (finds and opens the top video) or Spotify
-    (opens the app on a search for the song, or just resumes playback)."""
+    (opens app/web player search for the song, or resumes playback)."""
     service = (service or "youtube").lower()
     q = (query or "").strip()
     if "spotify" in service:
         argv, _ = _find_app_launch("spotify")
-        if argv is None:
-            return "Spotify doesn't seem to be installed."
-        if not q:
-            res = media_control("play", "spotify")
-            if "No media player" not in res:
-                return "Resuming Spotify playback."
-        subprocess.Popen(argv, stdout=DEVNULL, stderr=DEVNULL, start_new_session=True)
-        if q:
-            time.sleep(3)  # give the client a moment before deep-linking
-            subprocess.Popen(["xdg-open", f"spotify:search:{q}"],
-                             stdout=DEVNULL, stderr=DEVNULL, start_new_session=True)
-            return (f"Opened Spotify search for '{q}' — the results are on screen; "
-                    "say 'pause'/'next' once it plays.")
-        return "Opened Spotify."
-    # YouTube: resolve the top video and open it directly (it starts playing).
+        if argv is not None:
+            if not q:
+                res = media_control("play", "spotify")
+                if "No media player" not in res:
+                    return "Resuming Spotify playback."
+            subprocess.Popen(argv, stdout=DEVNULL, stderr=DEVNULL, start_new_session=True)
+            if q:
+                time.sleep(2)  # give the client a moment before deep-linking
+                subprocess.Popen(["xdg-open", f"spotify:search:{q}"],
+                                 stdout=DEVNULL, stderr=DEVNULL, start_new_session=True)
+                return (f"Opened Spotify search for '{q}' — playing on your Spotify client.")
+            return "Opened Spotify."
+        else:
+            # Fallback to Spotify Web Player
+            if q:
+                url = f"https://open.spotify.com/search/{q.replace(' ', '%20')}"
+                subprocess.Popen(["xdg-open", url], stdout=DEVNULL, stderr=DEVNULL, start_new_session=True)
+                return f"Opened Spotify Web search for '{q}' in your browser."
+            else:
+                subprocess.Popen(["xdg-open", "https://open.spotify.com"], stdout=DEVNULL, stderr=DEVNULL, start_new_session=True)
+                return "Opened Spotify Web Player."
+
+    # YouTube: use yt-dlp to resolve exact top video URL instantly if query provided
     if not q:
         return "What should I play on YouTube?"
     url = None
     try:
-        from ddgs import DDGS
-        vids = list(DDGS().videos(q + " youtube", max_results=3))
-        for v in vids:
-            u = v.get("content") or v.get("url") or ""
-            if "youtube.com/watch" in u or "youtu.be/" in u:
-                url = u
-                break
+        ytdlp_bin = shutil.which("yt-dlp") or os.path.join(os.path.dirname(__file__), "venv/bin/yt-dlp")
+        if os.path.exists(ytdlp_bin):
+            res = subprocess.run([ytdlp_bin, "--get-id", "--get-title", f"ytsearch1:{q}"],
+                                 stdout=subprocess.PIPE, stderr=DEVNULL, text=True, timeout=8)
+            lines = [l.strip() for l in res.stdout.splitlines() if l.strip()]
+            if len(lines) >= 2:
+                vid_id = lines[-1]
+                title = lines[0]
+                url = f"https://www.youtube.com/watch?v={vid_id}"
+                subprocess.Popen(["xdg-open", url], stdout=DEVNULL, stderr=DEVNULL, start_new_session=True)
+                return f"Playing on YouTube: '{title}' ({url})"
     except Exception:
         pass
+
+    if url is None:
+        try:
+            from ddgs import DDGS
+            vids = list(DDGS().videos(q + " youtube", max_results=3))
+            for v in vids:
+                u = v.get("content") or v.get("url") or ""
+                if "youtube.com/watch" in u or "youtu.be/" in u:
+                    url = u
+                    break
+        except Exception:
+            pass
+
     if url is None:
         url = "https://www.youtube.com/results?search_query=" + q.replace(" ", "+")
-        subprocess.Popen(["xdg-open", url], stdout=DEVNULL, stderr=DEVNULL,
-                         start_new_session=True)
+        subprocess.Popen(["xdg-open", url], stdout=DEVNULL, stderr=DEVNULL, start_new_session=True)
         return f"Opened YouTube search for '{q}'."
-    subprocess.Popen(["xdg-open", url], stdout=DEVNULL, stderr=DEVNULL,
-                     start_new_session=True)
+
+    subprocess.Popen(["xdg-open", url], stdout=DEVNULL, stderr=DEVNULL, start_new_session=True)
     return f"Playing on YouTube: {url}"
+
+
+def create_homework_docx(title="", content="", filename=None, folder="Documents"):
+    """Create a formatted MS Word (.docx) document for homework, essays, or reports,
+    and automatically open it in LibreOffice Writer / MS Word."""
+    if not title and not content:
+        return "Please provide a title or content for the document."
+    try:
+        import re
+        import docx
+        from docx.shared import Inches
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        doc = docx.Document()
+        sections = doc.sections
+        for sec in sections:
+            sec.top_margin = Inches(1)
+            sec.bottom_margin = Inches(1)
+            sec.left_margin = Inches(1)
+            sec.right_margin = Inches(1)
+
+        t_text = title.strip() or "Homework Assignment"
+        h = doc.add_heading(t_text, level=0)
+        h.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        lines = content.strip().split("\n")
+        for line in lines:
+            line_s = line.strip()
+            if not line_s:
+                continue
+            if line_s.startswith("# "):
+                doc.add_heading(line_s[2:].strip(), level=1)
+            elif line_s.startswith("## "):
+                doc.add_heading(line_s[3:].strip(), level=2)
+            elif line_s.startswith("### "):
+                doc.add_heading(line_s[4:].strip(), level=3)
+            elif line_s.startswith("- ") or line_s.startswith("* "):
+                doc.add_paragraph(line_s[2:].strip(), style='List Bullet')
+            elif re.match(r'^\d+\.\s', line_s):
+                text_num = re.sub(r'^\d+\.\s', '', line_s)
+                doc.add_paragraph(text_num, style='List Number')
+            else:
+                doc.add_paragraph(line_s)
+
+        safe_name = filename or f"{re.sub(r'[^a-zA-Z0-9_-]', '_', t_text.lower())}.docx"
+        if not safe_name.endswith(".docx"):
+            safe_name += ".docx"
+
+        if folder.startswith("/") or folder.startswith("~"):
+            target_dir = os.path.realpath(os.path.expanduser(folder))
+        else:
+            target_dir = os.path.expanduser(f"~/{folder.strip('/')}")
+
+        os.makedirs(target_dir, exist_ok=True)
+        out_path = os.path.join(target_dir, safe_name)
+        doc.save(out_path)
+
+        subprocess.Popen(["xdg-open", out_path], stdout=DEVNULL, stderr=DEVNULL, start_new_session=True)
+        return f"Created formatted MS Word document: '{out_path}' and opened it in your office application."
+    except Exception as exc:
+        return f"Error creating docx: {exc}"
+
+
+def browse_and_read_webpage(url_or_query=""):
+    """Open a webpage or web search in your browser, visually scroll down,
+    and extract the structured text for reading."""
+    q = (url_or_query or "").strip()
+    if not q:
+        return "Please specify a URL or search query."
+
+    url = q if q.startswith("http://") or q.startswith("https://") else f"https://www.google.com/search?q={q.replace(' ', '+')}"
+    subprocess.Popen(["xdg-open", url], stdout=DEVNULL, stderr=DEVNULL, start_new_session=True)
+
+    text_content = ""
+    try:
+        req_url = q if q.startswith("http") else None
+        if not req_url:
+            from ddgs import DDGS
+            results = list(DDGS().text(q, max_results=1))
+            if results and "href" in results[0]:
+                req_url = results[0]["href"]
+        if req_url:
+            text_content = fetch_webpage(req_url, max_chars=4000)
+    except Exception:
+        text_content = f"Opened browser at {url}."
+
+    if shutil.which("xdotool"):
+        try:
+            time.sleep(1.5)
+            subprocess.run(["xdotool", "key", "Page_Down"], stdout=DEVNULL, stderr=DEVNULL)
+        except Exception:
+            pass
+
+    return f"Opened {url} in browser.\n\nExtracted content:\n{text_content}"
+
 
 
 # --- OS health scan -------------------------------------------------------------------
@@ -1975,6 +2096,25 @@ TOOLS = [
             "url": {"type": "string", "description": "The YouTube URL"}},
             "required": ["url"]}}},
     {"type": "function", "function": {
+        "name": "create_homework_docx",
+        "description": ("Create a beautifully formatted, full-length MS Word (.docx) document "
+                        "for homework, essays, research reports, or assignments. Write thorough, "
+                        "multi-paragraph content with clear headings (# Section), bullet points, "
+                        "and complete explanations. Automatically opens in LibreOffice / MS Word."),
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "Title of the homework/assignment"},
+            "content": {"type": "string", "description": "Thorough, full-length formatted text with headings (#, ##), paragraphs, and bullet points"},
+            "filename": {"type": "string", "description": "Optional custom filename, e.g. physics_homework.docx"},
+            "folder": {"type": "string", "description": "Folder in home, defaults to 'Documents'"}},
+            "required": ["title", "content"]}}},
+    {"type": "function", "function": {
+        "name": "browse_and_read_webpage",
+        "description": ("Open a webpage or query in the web browser, scroll down like a human, "
+                        "and extract readable text for the user."),
+        "parameters": {"type": "object", "properties": {
+            "url_or_query": {"type": "string", "description": "URL or search query"}},
+            "required": ["url_or_query"]}}},
+    {"type": "function", "function": {
         "name": "create_project_file",
         "description": ("Create or overwrite a file inside the student's study "
                         "projects folder (~/StudyProjects). Use to scaffold starter "
@@ -2104,7 +2244,7 @@ _DISPATCH = {
     "media_control": lambda a, c: media_control(a.get("action", ""), a.get("player")),
     "install_model": lambda a, c: install_model(a.get("name", ""),
                                                 a.get("switch", True), confirm=c),
-    "switch_model": lambda a, c: switch_model(a.get("name", "")),
+    "switch_model": lambda a, c: switch_model(a.get("name", ""), confirm=c),
     "open_url": lambda a, c: open_url(a.get("url", "")),
     "play_media": lambda a, c: play_media(a.get("query", ""),
                                           a.get("service", "youtube")),
@@ -2145,6 +2285,9 @@ _DISPATCH = {
     "delete_file": lambda a, c: delete_file(a.get("path", ""), confirm=c),
     "move_file": lambda a, c: move_file(a.get("src", ""), a.get("dst", ""),
                                         bool(a.get("copy")), confirm=c),
+    "create_homework_docx": lambda a, c: create_homework_docx(a.get("title", ""), a.get("content", ""),
+                                                              a.get("filename"), a.get("folder", "Documents")),
+    "browse_and_read_webpage": lambda a, c: browse_and_read_webpage(a.get("url_or_query", "")),
     "list_folder": lambda a, c: list_folder(a.get("path", "~")),
 }
 

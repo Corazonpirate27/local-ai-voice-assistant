@@ -1,0 +1,44 @@
+Candidate Name: My name is Haruki Baram, I'm from Bukhara.
+Cambridge 20 - Test 3 Speaking Mock
+Date: 2026-10-30 15:03:24
+
+--- STRICT FLUENCY TELEMETRY ---
+Total Speaking Duration: 496.6s
+Total Stuck / Hesitation Time: 109.1s (22.0%)
+Hesitations (>=0.8s): 94 pauses (Longest: 3.25s)
+Total Disfluency Fillers (ah/um/uh): 24
+Calculated Fluency Band: Band 7.0
+
+--- PART 1: MUSEUMS ---
+Examiner: Thank you. In this first part, I'd like to ask you some questions about museums. Did you enjoy going to museums when you were a child? Why or why not?
+Candidate: I used to go museum when I was very young, especially from our school, from our school, we used to go for a museum to see our culture, history, and so many artifacts about our past, our forefathers used to use kind of a technology.
+
+Examiner: Are there any interesting museums near where you live now?
+Candidate: I guess, a few kilometers from my hometown, there is a museum, where our history is preserved well.
+
+Examiner: Do you think it is best to visit museums by yourself or with friends? Why?
+Candidate: It is best to visit museum by myself alone or with, or with my friend. Both is, uh, best way to visit a museum, but especially I always go alone in the museum because I need some silence to study some thing about our history which are preserved in the museum. So it takes me more than an hour to complete the whole museum, that's why I usually go alone.
+
+Examiner: When you visit another city or country, do you think it is important to visit a museum there?
+Candidate: Yes, it is, ah, very important to visit the museum from different countries, because those museums represent the country, what is specific, a country is all about, and their culture, and religions.
+
+--- PART 2: CUE CARD ---
+Topic: Describe a piece of work you did for your job or your studies that you felt very satisfied with.
+Candidate Speech: I work as well as a study. Okay, I work as well as a study, uh, in the field of technology, and my specialization is software engineering, where I create applications about different sectors, using different methods. And I remember one of my best, uh, application, where I get satisfied a lot, was creating a AI with cyber security concern. I created the AI, especially for to take vulnerabilities in the system, in the system is it exist or not in almost everyone's personal computer to laptop, to smartphone, and many more technologies. This AI application, I have created, was, uh, 50% use case for the market, at the first phase. And currently, it is, it is complete with my friend, with the help of my senior friend, who used to work here for more than a decade. And our AI application is all about cyber security. The content is all about the cyber security, where AI can do, uh, such as network monitoring, monitoring the whole application, is it, is it updated or not, as well as our second use case of this application was to do penetration testing, which is a part of a red teaming, that means it's an offensive, uh, use case, by doing offensive thing, uh, with the application, we can found where the vulnerability is existed or not. So this application has a lot of rating in the, uh, market, where I have uploaded, uh, in a library called GitHub, which is the platform for software developers to upload their project and share with other developers. So this, the motivation for this came to me, uh, by thinking like, I need to protect the whole digital citizens in the internet. So this becomes my motivation and discipline. So I find very satisfied because I have numbers of vulnerabilities encountered by this application. With me and this application, we have encountered a lot of vulnerabilities threats. And we can do some kind of mitigations to recover from this disaster of threat.
+
+--- PART 3: JOB SATISFACTION & AMBITION ---
+Examiner: Let's consider career satisfaction first. What are the main factors that make people feel dissatisfied in their jobs?
+Candidate: In the current market, ah, AI is, ah, increasing a lot like, ah, they are increasing a lot, but people are concerned, are feared about AI gonna take their adsorb at the future, those kind of, ah, fearness has dissatisfied, dissatisfied, their job career, in the current market.
+
+Examiner: Do you think earning a high salary is the single most important factor in job satisfaction?
+Candidate: Yes, ah, high salary is important factor in, top satisfaction, but main thing is all about how curiosity, how enthusiasm of the work, ah, the worker is on, like, like a worker needs to be interested in those sector, motivating, you need some discipline, and his career outcome should match his personal interests, that's the main satisfaction in the job, rather
+
+Examiner: How important is ambition for young professionals starting out in modern careers?
+Candidate: Uh, to, in current generation, in this, in this, in this, until now, till now, till now, many next generation young professionals are coming in the market, in, in terms of career. And I find so ambitious in the technology sector, because these generation are grown with the technology. So they are very ambitious and enthusiastic in this, ah, tech sector, for career, such as, they want to work on artificial intelligence, cyber security, as well as software development. These three main tech sectors are where young professionals are now very curious on, especially for the career.
+
+Examiner: What are the potential drawbacks of being overly ambitious in the workplace?
+Candidate: There aren't that much of a drawback to by being overly ambitious in workplace, but sometimes people think like they can do, they can do more than they think, but in actual result, our actual outcome of the work doesn't show that. So sometimes that's when I disappoint the members or employer of the company.
+
+Examiner: Do you agree that a person's work life has a greater impact on their overall happiness than their personal life?
+Candidate: I don't agree, because person work life is a different thing to get, to get income or to get money. People used to work, but in the other side happiness is all about self motivation, personal interest, as well as satisfaction with their life is all about towards happiness and their personal life rather than person working work life.
+
