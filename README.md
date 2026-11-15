@@ -203,17 +203,16 @@ A personal tutor with real teaching mechanics, in text mode (`--text --agent`):
 - **Auto model pick** — programming → `qwen2.5-coder`, everything else →
   `qwen3:8b` (pulled for this; the smartest model that fits the GPU).
 
-## Practice modes 🎭 (Exam · Embassy · Work · Interview)
+## Practice modes 🎭 (Exam · Work · Tech Interview)
 
 Role-play coaching for real-life situations — the assistant plays the examiner /
-visa officer / colleague / hiring manager, asks one question at a time, probes
+colleague / technical hiring manager, asks one question at a time, probes
 weak answers, and gives honest feedback at the end.
 
 - **Voice mode:** press **[p]** in the menu, pick a section. Say "stop practice" to end.
-- **Text mode:** `/practice embassy` (or `exam`, `work`, `interview`); `/practice off` to end.
+- **Text mode:** `/practice interview` (or `exam`, `work`); `/practice off` to end.
 
-Example — Embassy: *"Good morning. Please state your full name for the record."*
-→ your answer → *"Can you elaborate on what specifically you hope to study…?"*
+Example — Technical Interview: *"Good morning. Can you walk me through how you handle concurrency and race conditions in asynchronous systems?"*
 
 ## Always-on background service
 
