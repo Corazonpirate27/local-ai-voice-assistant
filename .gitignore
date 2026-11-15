@@ -17,6 +17,8 @@ mic_input.wav
 va_mic_input.wav
 
 # Personal Session Transcripts & Temporary Notes
+*transcript*.txt
+cambridge*.txt
 *speaking_transcript*.txt
 test_write.txt
 *.log
